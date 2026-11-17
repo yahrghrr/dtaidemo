@@ -20,6 +20,8 @@ Configuration comes from environment variables (the installer writes them to
   SOURCE_NAME         value of the "source" dimension   (default dtaidemo)
   FORCE_SPIKE_FILE    if this file exists, spike now    (default /var/lib/dtaidemo/force_spike)
   EXTRA_DIMENSIONS    optional, e.g. dt.entity.custom_device=CUSTOM_DEVICE-ABC,team=demo
+  HEARTBEAT_LOGS      "true" = also send one log line per cycle to the Logs API
+                      (token then also needs logs.ingest)  (default false)
   DRY_RUN             "true" = print lines, don't send   (default false)
 """
 
@@ -27,6 +29,7 @@ import os
 import random
 import signal
 import socket
+import json
 import ssl
 import sys
 import time
@@ -110,14 +113,25 @@ def build_lines(values, dims):
     )
 
 
-def send(url, token, payload):
+def build_log(values, dims, spiking):
+    record = {
+        "content": f"dtaidemo heartbeat ({'SPIKE' if spiking else 'normal'})",
+        "log.source": "dtaidemo",
+        "loglevel": "WARN" if spiking else "INFO",
+    }
+    record.update(dims)
+    record.update({f"{METRIC_PREFIX}.{k}": round(max(0.0, v), 2) for k, v in values.items()})
+    return json.dumps([record])
+
+
+def send(url, token, payload, path="/api/v2/metrics/ingest", ctype="text/plain; charset=utf-8"):
     req = urllib.request.Request(
-        url + "/api/v2/metrics/ingest",
+        url + path,
         data=payload.encode("utf-8"),
         method="POST",
         headers={
             "Authorization": f"Api-Token {token}",
-            "Content-Type": "text/plain; charset=utf-8",
+            "Content-Type": ctype,
         },
     )
     with urllib.request.urlopen(req, timeout=15, context=ssl.create_default_context()) as resp:
@@ -139,6 +153,7 @@ def main():
             k, v = pair.split("=", 1)
             dims[k.strip()] = v.strip().strip('"')
 
+    heartbeat_logs = env("HEARTBEAT_LOGS", "false").lower() == "true"
     sim = Simulator()
     running = True
 
@@ -154,11 +169,25 @@ def main():
 
     while running:
         spiking = sim.in_spike()
-        payload = build_lines(sim.sample(spiking), dims)
+        values = sim.sample(spiking)
+        payload = build_lines(values, dims)
         state = "SPIKE " if spiking else "normal"
         if dry_run:
             log(f"[{state}] would send:\n{payload}")
+            if heartbeat_logs:
+                log(f"[{state}] would send log: {build_log(values, dims, spiking)}")
         else:
+            if heartbeat_logs:
+                try:
+                    status, _ = send(url, token, build_log(values, dims, spiking),
+                                     "/api/v2/logs/ingest", "application/json; charset=utf-8")
+                    log(f"[{state}] sent heartbeat log, HTTP {status}")
+                except urllib.error.HTTPError as e:
+                    log(f"[{state}] log rejected: HTTP {e.code} {e.read().decode('utf-8', 'replace')}")
+                    if e.code in (401, 403):
+                        log("Hint: HEARTBEAT_LOGS needs the 'logs.ingest' token scope")
+                except Exception as e:
+                    log(f"[{state}] log send failed: {e}")
             try:
                 status, body = send(url, token, payload)
                 log(f"[{state}] sent 4 metrics, HTTP {status} {body.strip()}")

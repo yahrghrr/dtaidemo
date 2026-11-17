@@ -52,6 +52,8 @@ SPIKE_EVERY_MAX=30
 SPIKE_DURATION_MIN=5
 # Value of the "source" dimension (used by OpenPipeline to recognise this data)
 SOURCE_NAME=dtaidemo
+# true = also send a heartbeat log line each cycle (token needs logs.ingest too)
+HEARTBEAT_LOGS=false
 EOF
   chmod 600 /etc/dtaidemo/config.env
   umask 022

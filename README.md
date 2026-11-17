@@ -21,7 +21,8 @@ Every data point has the dimensions `source="dtaidemo"` and `host="<vm name>"`.
 1. In Dynatrace, open the **Access tokens** app (search "Access tokens" with Ctrl+K / Cmd+K).
 2. Click **Generate new token**. Name it `dtaidemo`.
 3. Add the scope **Ingest metrics** (`metrics.ingest`).
-   - Optional: also add **Write entities** (`entities.write`) if you want the custom device in Part C.
+   - Optional: **Ingest logs** (`logs.ingest`), only needed for the log fallback in Part C.
+   - Optional: **Write entities** (`entities.write`), only needed for the classic custom device in Part D.
 4. Click **Generate** and **copy the token** (it starts with `dt0c01.`). You will only see it once.
 
 You also need your **environment URL**. It's the address in your browser, e.g. `https://abc12345.apps.dynatrace.com`.
@@ -56,6 +57,7 @@ on a standard Azure VM (outbound HTTPS is allowed by default).
 | **Force a spike now** (lasts 5 min) | `sudo dtaidemo-spike` |
 | Stop / start | `sudo systemctl stop dtaidemo` / `sudo systemctl start dtaidemo` |
 | Change settings (interval, spike timing, …) | `sudo nano /etc/dtaidemo/config.env` then `sudo systemctl restart dtaidemo` |
+| Update to the latest version (keeps your settings) | `cd ~/dtaidemo && git pull && sudo ./install.sh` |
 | Remove everything | `cd ~/dtaidemo && sudo ./uninstall.sh` |
 
 ### A5. Check the data arrived in Dynatrace
@@ -93,7 +95,7 @@ fetch dt.entity.service
      fieldsAdd dt.entity.service = "SERVICE-1A2B3C4D5E6F7A8B"
      ```
      (replace with your real ID from B1)
-   - Optional, if you do Part C, add the custom device too:
+   - Optional, if you use the classic custom device from Part D, add it too:
      ```
      fieldsAdd dt.entity.service = "SERVICE-1A2B3C4D5E6F7A8B",
                dt.entity.custom_device = "CUSTOM_DEVICE-ABCDEF0123456789"
@@ -129,29 +131,119 @@ Then run `sudo dtaidemo-spike` on the VM to test. A problem should open on the s
 
 ---
 
-## Part C: Does this create its own node in Smartscape?
+## Part C: Create a Smartscape node and link it to the service (OpenPipeline)
 
-**No.** Sending metrics, even with `dt.entity.service` attached, **does not create any new entity or Smartscape node**.
-The dimension only *points at* the existing service. The metric becomes "about" that service: it can be charted per service
-and the problem lands on the service node, but nothing new appears in the topology.
+Part B only *tags* the metrics with the service ID. That makes problems land on the service, but it does **not** draw anything
+new in Smartscape. To get a **node of its own, connected to your service**, you use the two Smartscape stages in OpenPipeline:
+**Smartscape node extraction** creates the node, and an **edge** connects it to the service.
 
-If you want the 3rd-party source to show up as **its own entity**, register a **custom device**:
+> **Before you start:** you need **Smartscape on Grail** and an OpenPipeline version that has the Smartscape stages
+> (added in version 1.330). These steps were written from Dynatrace's docs summaries and a working example; exact field
+> labels and the list of edge types may look slightly different on your tenant.
+
+**What you'll end up with:**
+```
+ [ VENDORX_DEVICE: myvm ] ──(edge)──▶ [ SERVICE: my-service ]
+          ▲
+   created from every dtaidemo data point (one node per VM, identified by "host")
+```
+
+### C1. Check which data type to use (metrics or logs)
+1. Open the **OpenPipeline** app, then **Metrics**, then your `dtaidemo` pipeline from Part B.
+2. Look at the list of stages. Do you see **Smartscape node extraction**?
+   - **Yes:** use this Metrics pipeline for the steps below.
+   - **No:** use the **log fallback**. On the VM, edit the config (`sudo nano /etc/dtaidemo/config.env`) and set (or add)
+     `HEARTBEAT_LOGS=true`, then `sudo systemctl restart dtaidemo`. The program now also sends one small log line
+     per cycle with the same `source` and `host` fields. (The token needs **Ingest logs**; see A1.)
+     Then in OpenPipeline, open **Logs** (not Metrics) and create a pipeline + route exactly like **B2–B3**
+     (same name, same matching condition `source == "dtaidemo"`, same DQL processor). Do steps C2–C4 in that **Logs** pipeline.
+
+### C2. Find the service's Smartscape ID
+The edge needs the ID that Smartscape on Grail uses for your service. In a **Notebook**, run:
+```
+smartscapeNodes "SERVICE"
+| filter contains(name, "my-service")
+```
+Copy the ID shown. It's often the same `SERVICE-…` value you used in Part B. If it is, you can skip C3's extra field and
+use `dt.entity.service` as the target field in C4.
+
+### C3. Put the service ID on each record (Processing stage)
+In the same pipeline, open the **Processing** stage. Edit the **Attach service entity** processor from B2 so that it also adds
+a field holding the Smartscape ID from C2:
+```
+fieldsAdd dt.entity.service = "SERVICE-1A2B3C4D5E6F7A8B",
+          dtaidemo.service_id = "SERVICE-1A2B3C4D5E6F7A8B"
+```
+(Use the C2 value for `dtaidemo.service_id`. The processing stage runs **before** the Smartscape stage, so the field is
+available when the node and edge are built.)
+
+### C4. Create the node and the link (Smartscape node extraction stage)
+1. Still in the same pipeline, open the **Smartscape node extraction** stage and click **+ Processor**.
+2. Fill it in:
+
+   | Setting | Value | Why |
+   |---|---|---|
+   | **Name** | `dtaidemo device node` | just a label |
+   | **Matching condition** | `source == "dtaidemo"` | only our data |
+   | **Node type** | `VENDORX_DEVICE` | capital letters, your own name; this becomes the node type in Smartscape (like `CUSTOM_TERMINALS` in the example) |
+   | **ID components** | `host` | one node per VM; the same host always gives the same node ID |
+   | **Node name** | `host` | the name shown on the node |
+   | **Extract node** | on | actually creates and stores the node |
+   | **Node validity** (if shown) | `60` minutes | how long the node stays after the last data point (allowed 60–1440) |
+
+3. In the same processor, add a **static edge** (this is the link to the service):
+
+   | Setting | Value |
+   |---|---|
+   | **Edge type** | pick the relationship from the list. A device feeding a service usually fits **calls**, or **belongs to** if it's part of that service |
+   | **Target type** | `SERVICE` |
+   | **Target ID field** | `dtaidemo.service_id` (or `dt.entity.service` if the IDs matched in C2) |
+
+4. **Save** the pipeline. The route from B3 already sends the data here, so nothing else needs changing.
+
+> **Static or dynamic edge?** A *static edge* (above) is attached to the node itself and is the simplest choice when the device
+> always belongs to the same service. If the device → service relationship changes over time, use the separate
+> **Smartscape edge extraction** stage instead. It records the link as it was at each data point, using Smartscape IDs that are
+> already on the record.
+
+### C5. Check it worked (wait ~2–5 minutes)
+1. **The node exists:** in a Notebook run
+   ```
+   smartscapeNodes "VENDORX_DEVICE"
+   ```
+   You should see one row per VM running the program.
+2. **The link exists:** open **Smartscape on Grail**, search for your VM name in **Find nodes**, click it, then **View topology**.
+   You should see a line to your service. Turn on **Hide unconnected nodes**: if your node still shows, it's linked.
+   (In the example screenshot the `CUSTOM_TERMINALS` nodes are loose dots because they have no edges.)
+3. **Nothing appears?** Check that:
+   - the route's matching condition really matches (`source == "dtaidemo"`)
+   - the Processing processor runs (the Notebook query from B4 shows the service ID)
+   - the target ID field name in C4 matches the field you added in C3 exactly
+   - the program is still sending (`sudo journalctl -u dtaidemo -f` shows `HTTP 202`)
+
+### C6. Alerts and problems
+- Keep the anomaly detector from **B5** as it is (`dt.source_entity = {dims:dt.entity.service}`). The problem lands on the
+  **service**, and because the device node is now linked to it, the relationship is visible when you open the topology
+  around the problem.
+- If you'd rather have problems on the **device node**, check in your tenant which dimension the node extraction adds to
+  the records. It's typically a field carrying the new node's Smartscape ID. Split the detector's query by that dimension and
+  use it as `dt.source_entity`.
+
+---
+
+## Part D (alternative, classic): custom device via API
+
+If your tenant doesn't have Smartscape on Grail or the Smartscape stages in OpenPipeline, you can still create a **classic custom
+device** entity. It gets its own page with charts and problems, but it is **not linked** to the service in Smartscape.
 
 1. Make sure your token has **`entities.write`** (see A1).
 2. On the VM:
    ```bash
    cd ~/dtaidemo && ./create-custom-device.sh
    ```
-   It prints an ID like `CUSTOM_DEVICE-ABCDEF0123456789`. Running it again updates the same device instead of making a duplicate.
-3. Attach that ID to the metrics: either add `dt.entity.custom_device` in the OpenPipeline processor (B2, step 3 optional), or use
-   `EXTRA_DIMENSIONS=dt.entity.custom_device=CUSTOM_DEVICE-…` in the config.
-4. Find it in Dynatrace by searching for its display name. It has its own page with the metrics and any problems raised on it.
-   Check with: `fetch dt.entity.custom_device | filter contains(entity.name, "Vendor X")`
-
-**Caveat about the edge to the service:** a custom device is created **on its own**. It is *not* automatically connected to your
-service in Smartscape. Dynatrace only draws edges it detects itself, for example from network traffic seen by OneAgent.
-So, in practice:
-- **Alert on the service:** use `dt.source_entity = {dims:dt.entity.service}` (problem shows on the service).
-- **Alert on the device:** use `{dims:dt.entity.custom_device}`. The problem shows on the custom device, which then appears in the problem's affected entities.
-- An explicit "device → service" relationship needs topology rules (Settings → Topology model, or the Smartscape extraction options in
-  OpenPipeline on newer tenants). These options differ by tenant version, so check what your tenant offers before relying on them.
+   It prints an ID like `CUSTOM_DEVICE-ABCDEF0123456789`. Running it again updates the same device rather than creating a duplicate.
+3. Attach that ID to the metrics: either add it in the B2 processor
+   (`fieldsAdd dt.entity.custom_device = "CUSTOM_DEVICE-…"`) or add this line to `/etc/dtaidemo/config.env` and restart:
+   `EXTRA_DIMENSIONS=dt.entity.custom_device=CUSTOM_DEVICE-…`
+4. Find it in Dynatrace by searching for its display name. For problems on the device, use `{dims:dt.entity.custom_device}` as
+   `dt.source_entity` in the detector.
