@@ -65,6 +65,7 @@ on a standard Azure VM (outbound HTTPS is allowed by default).
 | What | Command |
 |---|---|
 | Watch it live (Ctrl+C to exit) | `sudo journalctl -u dtaidemo -f` |
+| See the log for a past time window | `sudo journalctl -u dtaidemo --since "12:45" --until "13:55"` |
 | **Force a spike now** (lasts 5 min) | `sudo dtaidemo-spike` |
 | **Tie the data to a service** (or change it) | `sudo dtaidemo-set-service SERVICE-1A2B3C4D5E6F7A8B` |
 | Untie it from the service | `sudo dtaidemo-set-service none` |
@@ -112,10 +113,10 @@ endpoint (HTTP 200) and an `/error` endpoint (HTTP 500), built to be monitored b
 
 Full instructions, including the firewall and troubleshooting, are in that repository's README.
 
-**Bonus: test Vendor X and service problems together.** With both apps running, run `sudo dtaidemo-spike` and, in the same few
-minutes, `bash scripts/trigger.sh storm 10` in the dynatrace-demo folder (10 minutes of ~50% errors). If both events are
-open at the same time, Dynatrace usually puts them on one problem card: check its **Events** tab. This needs the Vendor X
-alert to be on the **service** (see **C6**, option A).
+**Bonus: test Vendor X and service problems together.** With both apps running, start `bash scripts/trigger.sh storm 10`
+in the dynatrace-demo folder (10 minutes of ~50% errors), then about 3 minutes later run `sudo dtaidemo-spike`. If both
+events are open at the same time, Dynatrace usually puts them on one problem card. This needs the Vendor X alert to be on
+the **service** (see **C6**, option A). Step-by-step test and Notebook checks: **[Part E](#part-e-test-it-and-confirm-everything-in-a-notebook)**.
 
 ---
 
@@ -228,7 +229,9 @@ The second line matters. The alert links the problem to an entity through a dime
 - Use case: **Static threshold**
 - Threshold: `150`, Unit: leave as is
 - Alert condition: **Alert if metric is above**
-- Click **Preview**: you should see one line per service, with spikes above 150 if one has happened recently.
+- Click **Preview**: you should see one line per service, with spikes above 150 if one has happened recently. Under
+  **Result time series**, the `dt.smartscape_source.id` column must show your **`SERVICE-…`** (if it shows
+  `CUSTOM_VENDORX_DEVICE-…`, the query is the node version from C6 option B).
 
 **3. Add details**
 
@@ -451,8 +454,7 @@ Use this if you want the Vendor X node itself to turn red in Smartscape, and you
 > option B query whose **event type** is set to `CUSTOM_INFO` (alert's **Advanced** tab → **Event properties** →
 > `event.type`). An info event shows on the Vendor X node's timeline but doesn't open a problem card of its own.
 
-To test, see **Bonus** under [Don't have a service yet?](#dont-have-a-service-yet): start
-`bash scripts/trigger.sh storm 10`, and about 3 minutes later run `sudo dtaidemo-spike`, then check the problem's **Events** tab.
+To test and confirm, follow **[Part E](#part-e-test-it-and-confirm-everything-in-a-notebook)**.
 
 ---
 
@@ -474,3 +476,85 @@ device** entity. It gets its own page with charts and problems, but it is **not 
    `EXTRA_DIMENSIONS`.)
 4. Find it in Dynatrace by searching for its display name. For problems on the device, use `{dims:dt.entity.custom_device}` as
    `dt.source_entity` in the detector.
+
+---
+
+## Part E: Test it and confirm everything in a Notebook
+
+### E1. Run the combined test (service errors + Vendor X spike)
+Both events must be **open at the same time** to share one problem card, so the order matters:
+1. On the dynatrace-demo VM, in the `dynatrace-demo` folder, start the error storm (10 minutes of ~50% errors):
+   ```bash
+   bash scripts/trigger.sh storm 10
+   ```
+2. **About 3 minutes later**, on the dtaidemo VM, start a Vendor X spike (lasts 5 minutes):
+   ```bash
+   sudo dtaidemo-spike
+   ```
+3. Wait about 5 minutes, then run the queries below.
+
+Both commands run **on the VMs** (in an SSH session from your laptop), not on the laptop itself.
+If a spike has just ended, wait until `sudo journalctl -u dtaidemo -n 5` shows `[normal]` lines again before starting a new one.
+
+### E2. Check queries (paste each into its own DQL section of a Notebook, timeframe e.g. last 6 hours)
+Way 2 (VM only) users: use `dt.entity.service` wherever these say `dtaidemo.service_id`.
+
+**1. Does the Vendor X data carry the service ID?**
+```
+timeseries v = avg(dtaidemo.queue_depth),
+  by:{dtaidemo.service_id, dt.entity.service, dt.smartscape.service}
+```
+| You see | Meaning |
+|---|---|
+| Your `SERVICE-…` in every column you use | Correct |
+| `dtaidemo.service_id` filled, the other two empty | You're on Way 1 only. That's fine |
+| Two or more lines | The IDs disagree: check the B2 processor and `SERVICE_ID` on the VM |
+| A straight line across a long gap | No data (or no data with the ID) arrived in that period: was the program stopped, the VM off, or the processor changed? Check with `sudo journalctl -u dtaidemo --since "12:45" --until "13:55"` (your times) |
+
+**2. Which entity is each event attached to?**
+```
+fetch dt.davis.events, from: now() - 6h
+| filter contains(event.name, "Vendor X") or contains(event.name, "error rate")
+| fieldsAdd entity = coalesce(dt.smartscape_source.id, dt.source_entity)
+| fields timestamp, event.name, event.status, entity
+| sort timestamp desc
+```
+- **Correct:** the newest **Vendor X** row and the **Request error rate increase** row show the **same `SERVICE-…`** in `entity`.
+- Vendor X row shows **`CUSTOM_VENDORX_DEVICE-…`**: the alert still points at the Vendor X node. Fix it in the alert (E3).
+- Built-in events (like *Request error rate increase*) store the service in `dt.source_entity`, while the custom alert uses
+  `dt.smartscape_source.id`. That's why the query combines both into `entity`, and why one of the two original columns is
+  `null` for each event. That's normal.
+
+**3. Did they land on one problem card?**
+```
+fetch dt.davis.problems, from: now() - 6h
+| filter contains(event.name, "Vendor X") or contains(event.name, "error rate")
+| sort timestamp desc
+| dedup display_id
+| fields event.start, display_id, event.name, event.status, affected_entity_ids, root_cause_entity_id, dt.davis.event_ids
+```
+- **Merged:** one `P-…` row whose `dt.davis.event_ids` holds two or more IDs.
+- **Not merged:** two `P-…` rows. Compare `event.start`: they have to overlap. If they did overlap, re-check query 2.
+- To look at one problem, replace the `filter` line with `| filter display_id == "P-1234567"`.
+
+> If a column is empty or a query errors, field names can differ slightly between tenants. Delete the `| fields …` line,
+> run it again, and look for the field holding the `SERVICE-…` value.
+
+### E3. Where to fix the alert if query 2 shows the wrong entity
+1. Open the **Anomaly Detection** app (Ctrl+K / Cmd+K, "Anomaly Detection") and open the **dtaidemo** alert.
+   Make sure there's only one Vendor X alert, or that you're editing the right one.
+2. On the **Simple** tab, expand **Set Scope** and set the **Query** to the B5 query for your way, e.g. Way 1:
+   ```
+   timeseries v = avg(dtaidemo.queue_depth), by:{dtaidemo.service_id}
+   | fieldsRename dt.smartscape_source.id = dtaidemo.service_id
+   ```
+3. Click **Preview** (under **Define alert condition**). Under **Result time series**, the `dt.smartscape_source.id` column
+   must show your `SERVICE-…`, not `CUSTOM_VENDORX_DEVICE-…`. **Simulated alerts** shows how many times the threshold
+   would have fired.
+4. Click **Save**. The preview alone changes nothing. A Vendor X event that's already open stays where it is until it
+   closes; only the **next** spike uses the new setting.
+
+### E4. A note on Dynatrace Assist
+Dynatrace Assist may quote `dt.source_entity = {dims:dtaidemo.service_id}` as if it were part of your alert. If you see
+that, it's usually leftover text in the alert's **Event description**, not a setting. Clean the description up in the
+alert's **Advanced** tab. On current tenants the setting that matters is `dt.smartscape_source.id` (B5).
