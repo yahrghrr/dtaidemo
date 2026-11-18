@@ -239,19 +239,24 @@ In the **Simple** tab this step only has two boxes:
 - **Title:** `dtaidemo`
 - **Event name:** `Vendor X queue depth too high on {dt.smartscape_source.id}`
 
-That's all Simple needs. It fills in the link to the entity (`dt.smartscape_source.id`) and the event type for you, which
-is why the `fieldsRename` line in the query matters.
+Simple fills in the link to the entity (`dt.smartscape_source.id`) and the event type for you, which is why the
+`fieldsRename` line in the query matters.
 
-*Optional, for full control:* switch to the **Advanced** tab. That's where the **Event description** box and the
-**Event properties** rows are. If you use it:
+**Then switch to the Advanced tab: one setting there is needed for merging.** Custom alerts can be created with
+**merging turned off** (`dt.davis.is_merging_allowed = false`). With merging off, Dynatrace *never* puts the Vendor X event
+on the same problem card as the service's own events, even when both are on the same service at the same time. In the
+**Advanced** tab:
 - **Event description:** plain text for whoever reads the problem, e.g.
   `Queue depth from the Vendor X feed is above 150 for service {dt.smartscape_source.id}.`
-- **Event properties:** you only need these two rows. Delete any others.
+- **Event properties:** you need these three rows. Delete any others.
 
   | Key | Value |
   |---|---|
   | `dt.smartscape_source.id` | `{dt.smartscape_source.id}` (pre-filled; keep it) |
   | `event.type` | `CUSTOM_ALERT` (or `ERROR_EVENT`) |
+  | `dt.davis.is_merging_allowed` | `true` (add this row; it allows one shared problem card) |
+
+  If a `dt.davis.is_merging_allowed` row is already there with `false`, change it to `true`.
 
   Don't type the README's instructions into these boxes. `event.name` and `event.description` are filled from the fields
   above, so they don't need rows of their own.
@@ -516,11 +521,13 @@ timeseries v = avg(dtaidemo.queue_depth),
 fetch dt.davis.events, from: now() - 6h
 | filter contains(event.name, "Vendor X") or contains(event.name, "error rate")
 | fieldsAdd entity = coalesce(dt.smartscape_source.id, dt.source_entity)
-| fields timestamp, event.name, event.status, entity
+| fields timestamp, event.name, event.status, entity, dt.davis.is_merging_allowed
 | sort timestamp desc
 ```
 - **Correct:** the newest **Vendor X** row and the **Request error rate increase** row show the **same `SERVICE-…`** in `entity`.
 - Vendor X row shows **`CUSTOM_VENDORX_DEVICE-…`**: the alert still points at the Vendor X node. Fix it in the alert (E3).
+- Vendor X row shows `dt.davis.is_merging_allowed` = **`false`**: merging is turned off in the alert. Add the property
+  (see **B5**, Advanced tab). Empty or `true` is fine.
 - Built-in events (like *Request error rate increase*) store the service in `dt.source_entity`, while the custom alert uses
   `dt.smartscape_source.id`. That's why the query combines both into `entity`, and why one of the two original columns is
   `null` for each event. That's normal.
@@ -534,7 +541,12 @@ fetch dt.davis.problems, from: now() - 6h
 | fields event.start, display_id, event.name, event.status, affected_entity_ids, root_cause_entity_id, dt.davis.event_ids
 ```
 - **Merged:** one `P-…` row whose `dt.davis.event_ids` holds two or more IDs.
-- **Not merged:** two `P-…` rows. Compare `event.start`: they have to overlap. If they did overlap, re-check query 2.
+- **Not merged:** two `P-…` rows. Check, in this order:
+  1. In query 2, the newest Vendor X row has `dt.davis.is_merging_allowed` = `false` → fix it in the alert (E3, step 4).
+  2. In query 2, the newest Vendor X row shows `CUSTOM_VENDORX_DEVICE-…` → fix the query (E3, step 2).
+  3. Compare `event.start`: the two problems have to overlap in time.
+
+  Older events from before a fix keep their old values, so only look at events created **after** you saved the change.
 - To look at one problem, replace the `filter` line with `| filter display_id == "P-1234567"`.
 
 > If a column is empty or a query errors, field names can differ slightly between tenants. Delete the `| fields …` line,
@@ -551,10 +563,18 @@ fetch dt.davis.problems, from: now() - 6h
 3. Click **Preview** (under **Define alert condition**). Under **Result time series**, the `dt.smartscape_source.id` column
    must show your `SERVICE-…`, not `CUSTOM_VENDORX_DEVICE-…`. **Simulated alerts** shows how many times the threshold
    would have fired.
-4. Click **Save**. The preview alone changes nothing. A Vendor X event that's already open stays where it is until it
+4. Switch to the **Advanced** tab and, under **Event properties**, make sure there's a row `dt.davis.is_merging_allowed` =
+   `true` (add it, or change `false` to `true`).
+5. Click **Save**. The preview alone changes nothing. A Vendor X event that's already open stays where it is until it
    closes; only the **next** spike uses the new setting.
 
 ### E4. A note on Dynatrace Assist
-Dynatrace Assist may quote `dt.source_entity = {dims:dtaidemo.service_id}` as if it were part of your alert. If you see
-that, it's usually leftover text in the alert's **Event description**, not a setting. Clean the description up in the
-alert's **Advanced** tab. On current tenants the setting that matters is `dt.smartscape_source.id` (B5).
+Dynatrace Assist is useful for reading your event data (it found `dt.davis.is_merging_allowed = false` on the Vendor X
+events), but check its fixes against this README:
+- It may quote `dt.source_entity = {dims:dtaidemo.service_id}` as if it were part of your alert. That's usually leftover text
+  in the alert's **Event description**, not a setting. Clean the description up in the alert's **Advanced** tab.
+- It may suggest an "OpenPipeline Davis event processor" or hard-coding `dt.smartscape_source.id = SERVICE-…`. Neither is
+  needed here: both settings belong in the **custom alert** (B5 / E3), and the `fieldsRename` line already fills in the
+  service ID.
+- It may report a mix of `SERVICE-…` and `CUSTOM_VENDORX_DEVICE-…` on past Vendor X events. That's just history from while
+  the alert pointed at the Vendor X node (C6 option B); only events after your last change matter.
