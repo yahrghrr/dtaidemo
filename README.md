@@ -689,14 +689,28 @@ Rules to remember:
 | | `event.type` | `ERROR_EVENT` |
 | | `dt.davis.is_merging_allowed` | `true` |
 
-Why each Advanced property matters (all four were needed for one card):
-- **`dt.smartscape_source.id`**: attaches the event to the service in the new Smartscape.
-- **`dt.source_entity`**: sets the problem's **primary** entity (`affected_entity_ids`). Without it, it falls back to
-  `ENVIRONMENT-0000000000000001` and won't merge with the service's problem.
-- **`event.type = ERROR_EVENT`**: same *Error* category as the service's built-in failure-rate problem.
-- **`dt.davis.is_merging_allowed = true`**: custom alerts can be created with merging **off**; this turns it on.
+### Rules for tying the problems together (what Dynatrace Assist found)
+With only the query and threshold set, the Vendor X alert kept opening its **own** problem card. Dynatrace Assist, asked
+why the problems weren't merging, read the event and problem data and found the blockers below. Each one had to be fixed;
+the last row is the result once all of them were in place.
+
+| # | Rule | What Dynatrace Assist found | Fix |
+|---|---|---|---|
+| 1 | The alert must be attached to the **service** through `dt.smartscape_source.id` | Vendor X events alternated between `CUSTOM_VENDORX_DEVICE-…` (alert pointed at the Vendor X node) and `SERVICE-…`. A device and a service are different entities, so Dynatrace had no shared entity to group them on | Query splits by the service ID and renames it: `\| fieldsRename dt.smartscape_source.id = dtaidemo.service_id`; event property `dt.smartscape_source.id` = `{dt.smartscape_source.id}` |
+| 2 | Merging must be **allowed** on the event | `dt.davis.is_merging_allowed = false` on the Vendor X events. With this, Dynatrace never merges the event into another problem, whatever the entity or timing | Event property `dt.davis.is_merging_allowed` = `true` |
+| 3 | The problem's **primary entity** must be the service | `smartscape.affected_entity.ids` showed the service, but `affected_entity_ids` (the main merge key) was `ENVIRONMENT-0000000000000001`, because the older `dt.source_entity` field was empty | Event property `dt.source_entity` = `{dt.smartscape_source.id}` (same service ID in the older field) |
+| 4 | Same **event category** as the service's problem | Vendor X was `CUSTOM_ALERT`; the service's *Failure rate increase* was `ERROR`. Different categories are less likely to merge | Event property `event.type` = `ERROR_EVENT` |
+| 5 | Events must **overlap in time** | Starts 3 minutes apart: fine, not a blocker | Test order: start the error storm, then `sudo dtaidemo-spike` about 3 minutes later |
+| ✅ | **Result** | One problem, *2 Events*, root cause **dynatrace-demo**, listing *Service failure rate increase* and *Vendor X queue depth too high* (screenshot above) | |
 
 Also: put the alert on the **service**, not on the Vendor X node. An alert on the node gives a separate problem card (C6).
+`dt.source_entity` is Dynatrace's older field and is being phased out in favour of `dt.smartscape_source.id`, but on this
+tenant the problem's primary entity still depended on it, so **set both**.
+
+**Dynatrace Assist suggestions that weren't needed here:** an "OpenPipeline Davis event processor" (both settings belong
+in the custom alert), and hard-coding `dt.smartscape_source.id = SERVICE-…` (the `fieldsRename` line already fills it in).
+Its first answer also quoted `dt.source_entity = {dims:…}` from leftover text in the alert's description, which wasn't a
+real setting. Use Assist to read the data, then check the fix against this table.
 
 ### 4. Check it worked
 Run the three Notebook queries in **E2**:
