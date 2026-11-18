@@ -1,5 +1,7 @@
 # dtaidemo: simulated 3rd-party telemetry for Dynatrace
 
+Author: **Sam JD**
+
 A small program that runs on a Linux VM and sends metrics to Dynatrace **every 30 seconds**.
 Most of the time the values are normal. **Every 15–30 minutes it spikes for 5 minutes**, which gives you something to alert on.
 You can also trigger a spike yourself at any time.
@@ -765,3 +767,7 @@ Run the three Notebook queries in **E2**:
 - [OpenPipeline limits](https://docs.dynatrace.com/docs/platform/openpipeline/reference/limits): fields OpenPipeline can't modify (`dt.entity.*` for metrics)
 - [Processing in OpenPipeline](https://docs.dynatrace.com/docs/platform/openpipeline/concepts/processing): stage order (Processing → Smartscape node → Smartscape edge → …)
 - [Davis event and problem model](https://docs.dynatrace.com/docs/semantic-dictionary/model/davis): `dt.davis.is_merging_allowed` (not allowed by default for `CUSTOM_ALERT`), `dt.smartscape_source.id`, deprecated `dt.source_entity` / `affected_entity_ids`, event types
+
+## Author
+
+Created and maintained by **Sam JD**.
