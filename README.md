@@ -175,101 +175,118 @@ Then run `sudo dtaidemo-spike` on the VM to test. A problem should open on the s
 ## Part C: Create a Smartscape node and link it to the service (OpenPipeline)
 
 Part B only *tags* the metrics with the service ID. That makes problems land on the service, but it does **not** draw anything
-new in Smartscape. To get a **node of its own, connected to your service**, you use the two Smartscape stages in OpenPipeline:
-**Smartscape node extraction** creates the node, and an **edge** connects it to the service.
+new in Smartscape. To get a **node of its own, connected to your service**, you use the two Smartscape stages in your
+OpenPipeline pipeline: **Smartscape node** creates the node, and an **edge** connects it to the service.
 
 > **Before you start:** you need **Smartscape on Grail** and an OpenPipeline version that has the Smartscape stages
-> (added in version 1.330). These steps were written from Dynatrace's docs summaries and a working example; exact field
-> labels and the list of edge types may look slightly different on your tenant.
+> (added in version 1.330). Field labels below match the pipeline editor as of late 2026; your tenant may differ slightly.
 
 **What you'll end up with:**
 ```
- [ VENDORX_DEVICE: myvm ] ──(edge)──▶ [ SERVICE: my-service ]
-          ▲
+ [ CUSTOM_VENDORX_DEVICE: myvm ] ──(edge)──▶ [ SERVICE: my-service ]
+              ▲
    created from every dtaidemo data point (one node per VM, identified by "host")
 ```
 
 ### C1. Check which data type to use (metrics or logs)
-1. Open the **OpenPipeline** app, then **Metrics**, then your `dtaidemo` pipeline from Part B.
-2. Look at the list of stages (the pipeline editor's left column, under **Processing**). Do you see a stage called
-   **Smartscape node** (some versions say **Smartscape node extraction**), usually followed by **Smartscape edge**?
-   - **Yes:** use this Metrics pipeline for the steps below.
+1. Go to **Settings → Process and contextualize → OpenPipeline → Metrics** and open your `dtaidemo` pipeline from Part B.
+2. Look at the list of stages. Directly below **Processing** you should see **Smartscape node** and **Smartscape edge**.
+   - **Yes (most tenants):** use this Metrics pipeline for the steps below.
    - **No:** use the **log fallback**. On the VM, edit the config (`sudo nano /etc/dtaidemo/config.env`) and set (or add)
      `HEARTBEAT_LOGS=true`, then `sudo systemctl restart dtaidemo`. The program now also sends one small log line
      per cycle with the same `source` and `host` fields. (The token needs **Ingest logs**; see A1.)
      Then in OpenPipeline, open **Logs** (not Metrics) and create a pipeline + route exactly like **B2–B3**
-     (same name, same matching condition `source == "dtaidemo"`, same DQL processor). Do steps C2–C4 in that **Logs** pipeline.
+     (same name, same matching condition `source == "dtaidemo"`, same DQL processor). Do steps C2–C5 in that **Logs** pipeline.
 
-### C2. Find the service's Smartscape ID
-The edge needs the ID that Smartscape on Grail uses for your service. In a **Notebook**, run:
-```
-smartscapeNodes "SERVICE"
-| filter contains(name, "my-service")
-```
-Copy the ID shown. It's usually the same `SERVICE-…` value you used in Part B.
+### C2. Check the service ID the link will point to
+The link needs the ID that Smartscape on Grail uses for your service.
+1. Open a **Notebook**, add a **DQL** section and run (put part of your service's name in the quotes):
+   ```
+   smartscapeNodes "SERVICE"
+   | filter contains(name, "my-service")
+   ```
+2. Compare the ID shown with the `SERVICE-…` value you typed in B2.
+   - **Same (usual case):** nothing to do. The **Attach service entity** processor already puts it on every record as
+     `dtaidemo.service_id`.
+   - **Different:** open the **Processing** stage, click **Attach service entity**, and change the definition to:
+     ```
+     fieldsAdd dtaidemo.service_id = "SERVICE-<your ID from B1>",
+               dtaidemo.service_smartscape_id = "<ID from this step>"
+     ```
+     Then wherever C4 says `dtaidemo.service_id`, use `dtaidemo.service_smartscape_id` instead.
 
-### C3. Make sure the service ID is on each record (Processing stage)
-- **Same ID as in B2:** nothing to do. The **Attach service entity** processor already adds `dtaidemo.service_id`.
-- **Different ID:** edit that processor and add a second field with the C2 value:
-  ```
-  fieldsAdd dtaidemo.service_id = "SERVICE-1A2B3C4D5E6F7A8B",
-            dtaidemo.service_smartscape_id = "<ID from C2>"
-  ```
-  Then use `dtaidemo.service_smartscape_id` as the target ID field in C4.
+### C3. Create the node, field by field (Smartscape node stage)
+1. In the pipeline, click **+ Smartscape node** (or the **+** at the right of the **Smartscape node** row).
+   A **New Processor** panel opens on the right.
+2. **Name:** type `dtaidemo device node`.
+3. **Matching condition:** it says `true` by default. Replace it with:
+   ```
+   source == "dtaidemo"
+   ```
+4. **Node type:** type `CUSTOM_VENDORX_DEVICE`.
+   Keep the `CUSTOM_` start, as the greyed-out example `CUSTOM_NodeType` shows. This is the type name you'll see in Smartscape.
+5. **Node ID field name:** type `dtaidemo.device_id`.
+   This is *where Dynatrace writes the new node's ID* on each record. It's a new field name, not something that already
+   exists. You use it again in C4 (the link) and C6 (alerts).
+6. **ID components:** these decide what makes one node different from another. We want one node per VM:
+   - in the left box (**ID component**) type `host`
+   - in the right box (**Referenced field name**) type `host`
+   - click **Add**. The list below should change from *No ID components defined* to show `host → host`.
+7. **Extract node:** switch the toggle **on** (*"Generate a smartscape event based on this signal"*).
+   Without this, the node is never actually created.
+8. **Scroll down** in the panel. Fill in whatever appears there:
+   - a **node name** (or similar) field: `host`, so the node is labelled with the VM name
+   - a **validity** / lifetime setting: `60` minutes (the program sends every 30 seconds, so the node stays alive)
+   - a **static edges** (or relationships) section: see **C4 option A**
+9. Don't save yet. Do C4 first, then save once.
 
-The processing stage runs **before** the Smartscape stage, so the field is available when the node and edge are built.
+### C4. Link the node to the service
+Use **option A** if the Smartscape node panel (C3, step 8) has a static edge / relationship section. Otherwise use **option B**.
 
-### C4. Create the node and the link (Smartscape node stage)
-1. Still in the same pipeline, find the **Smartscape node** stage (directly below **Processing**) and click its **+**.
-2. Fill it in:
+**Option A: static edge, inside the node processor from C3**
+1. In the static edges section, click **Add** (or **+**).
+2. **Edge type:** choose from the list. **calls** fits a feed that the service uses; **belongs to** fits a part of the service.
+3. **Target type:** `SERVICE`
+4. **Target ID field name:** `dtaidemo.service_id`
 
-   | Setting | Value | Why |
-   |---|---|---|
-   | **Name** | `dtaidemo device node` | just a label |
-   | **Matching condition** | `source == "dtaidemo"` | only our data |
-   | **Node type** | `VENDORX_DEVICE` | capital letters, your own name; this becomes the node type in Smartscape (like `CUSTOM_TERMINALS` in the example) |
-   | **ID components** | `host` | one node per VM; the same host always gives the same node ID |
-   | **Node name** | `host` | the name shown on the node |
-   | **Extract node** | on | actually creates and stores the node |
-   | **Node validity** (if shown) | `60` minutes | how long the node stays after the last data point (allowed 60–1440) |
+**Option B: Smartscape edge stage**
+1. Close the node panel (your input is kept) and click **+ Smartscape edge** in the **Smartscape edge** row.
+2. **Name:** `dtaidemo device to service`
+3. **Matching condition:** `source == "dtaidemo"`
+4. **Source type:** `CUSTOM_VENDORX_DEVICE` (same as the node type in C3)
+5. **Source ID field name:** `dtaidemo.device_id` (the node ID field from C3, step 5)
+6. **Edge type:** choose **calls** (or **belongs to**)
+7. **Target type:** `SERVICE`
+8. **Target ID field name:** `dtaidemo.service_id`
 
-3. In the same processor, add a **static edge** (this is the link to the service):
+The node stage runs before the edge stage, so `dtaidemo.device_id` is already filled in when the edge is built.
 
-   | Setting | Value |
-   |---|---|
-   | **Edge type** | pick the relationship from the list. A device feeding a service usually fits **calls**, or **belongs to** if it's part of that service |
-   | **Target type** | `SERVICE` |
-   | **Target ID field** | `dtaidemo.service_id` (or `dtaidemo.service_smartscape_id` if the IDs differed in C2) |
-
-4. **Save** the pipeline. The route from B3 already sends the data here, so nothing else needs changing.
-
-> **Static or dynamic edge?** A *static edge* (above) is attached to the node itself and is the simplest choice when the device
-> always belongs to the same service. If the device → service relationship changes over time, use the separate
-> **Smartscape edge** stage instead. It records the link as it was at each data point, using Smartscape IDs that are
-> already on the record.
+**Then save:** click **Save** at the top right of the pipeline. The route from B3 already sends the data here, so nothing else
+needs changing.
 
 ### C5. Check it worked (wait ~2–5 minutes)
 1. **The node exists:** in a Notebook run
    ```
-   smartscapeNodes "VENDORX_DEVICE"
+   smartscapeNodes "CUSTOM_VENDORX_DEVICE"
    ```
    You should see one row per VM running the program.
-2. **The link exists:** open **Smartscape on Grail**, search for your VM name in **Find nodes**, click it, then **View topology**.
+2. **The link exists:** open **Smartscape on Grail**, type your VM name in **Find nodes**, click it, then **View topology**.
    You should see a line to your service. Turn on **Hide unconnected nodes**: if your node still shows, it's linked.
-   (In the example screenshot the `CUSTOM_TERMINALS` nodes are loose dots because they have no edges.)
 3. **Nothing appears?** Check that:
-   - the route's matching condition really matches (`source == "dtaidemo"`)
-   - the Processing processor runs (the Notebook query from B4 shows the service ID)
-   - the target ID field name in C4 matches the field you added in C3 exactly
+   - the processor shows no red warning icon in the pipeline
+   - **Extract node** is on
+   - the matching conditions say `source == "dtaidemo"`, not `true` or a typo
+   - the field names are typed exactly: `dtaidemo.device_id`, `dtaidemo.service_id`
    - the program is still sending (`sudo journalctl -u dtaidemo -f` shows `HTTP 202`)
 
 ### C6. Alerts and problems
-- Keep the anomaly detector from **B5** as it is (it links the problem through `dt.smartscape_source.id`). The problem lands on the
-  **service**, and because the device node is now linked to it, the relationship is visible when you open the topology
-  around the problem.
-- If you'd rather have problems on the **device node**, check in your tenant which dimension the node extraction adds to
-  the records. It's typically a field carrying the new node's Smartscape ID. Split the detector's query by that dimension and
-  rename it to `dt.smartscape_source.id` (same `fieldsRename` trick as B5).
+- Keep the alert from **B5** as it is. The problem lands on the **service**, and because the device node is now linked to it,
+  you can see the device when you open the topology around the problem.
+- If you'd rather have problems on the **device node**, change the B5 query to use the node ID field from C3:
+  ```
+  timeseries v = avg(dtaidemo.queue_depth), by:{dtaidemo.device_id}
+  | fieldsRename dt.smartscape_source.id = dtaidemo.device_id
+  ```
 
 ---
 
