@@ -124,12 +124,41 @@ The split should show your `SERVICE-…` ID. Enrichment only applies to **new** 
 > **Metrics** in OpenPipeline at all.
 
 ### B5. Alert on it (makes the problem card)
-**Anomaly Detection** app, then **+ Custom anomaly detector**:
-- Query: `timeseries v = avg(dtaidemo.queue_depth), by:{dtaidemo.service_id}`
-- Model: **Static threshold**, alert **above `150`**, e.g. 3 of 5 violating samples
-- Event template: `event.type = ERROR_EVENT` (or `CUSTOM_ALERT`), `dt.source_entity = {dims:dtaidemo.service_id}`,
-  `event.name = "Vendor X queue depth too high"`.
-  `dt.source_entity` is what ties the problem to the service; it takes the `SERVICE-…` value from our field.
+Open the **Anomaly Detection** app and click **+ Custom alert** (older UIs: **Custom anomaly detector**). Use the **Simple** tab.
+
+**1. Set scope, then Query.** Copy both lines:
+```
+timeseries v = avg(dtaidemo.queue_depth), by:{dtaidemo.service_id}
+| fieldsRename dt.smartscape_source.id = dtaidemo.service_id
+```
+The second line matters. The alert links the problem to an entity through a dimension called **`dt.smartscape_source.id`**
+(the hint under the query box says so), so we give our service ID that name.
+
+**2. Define alert condition**
+- Use case: **Static threshold**
+- Threshold: `150`, Unit: leave as is
+- Alert condition: **Alert if metric is above**
+- Click **Preview**: you should see one line per service ID, with spikes above 150 if one has happened recently.
+
+**3. Add details**
+- **Title:** `dtaidemo`
+- **Event name:** `Vendor X queue depth too high`
+- **Event description:** plain text for whoever reads the problem, e.g.
+  `Queue depth from the Vendor X feed is above 150 for service {dims:dt.smartscape_source.id}.`
+- **Event properties:** you only need these two rows. Delete any others.
+
+  | Key | Value |
+  |---|---|
+  | `dt.smartscape_source.id` | `{dt.smartscape_source.id}` (pre-filled; keep it) |
+  | `event.type` | `CUSTOM_ALERT` (or `ERROR_EVENT`) |
+
+  Don't type the README's instructions into these boxes. `event.name` and `event.description` are filled from the fields
+  above, so they don't need rows of their own.
+
+Click **Save**.
+
+> **Older tenants:** if your alert screen has no `dt.smartscape_source.id` hint or property, it uses the classic field instead.
+> Leave out the `fieldsRename` line and add the property `dt.source_entity` = `{dims:dtaidemo.service_id}`.
 
 Then run `sudo dtaidemo-spike` on the VM to test. A problem should open on the service within a few minutes.
 
@@ -226,12 +255,12 @@ The processing stage runs **before** the Smartscape stage, so the field is avail
    - the program is still sending (`sudo journalctl -u dtaidemo -f` shows `HTTP 202`)
 
 ### C6. Alerts and problems
-- Keep the anomaly detector from **B5** as it is (`dt.source_entity = {dims:dtaidemo.service_id}`). The problem lands on the
+- Keep the anomaly detector from **B5** as it is (it links the problem through `dt.smartscape_source.id`). The problem lands on the
   **service**, and because the device node is now linked to it, the relationship is visible when you open the topology
   around the problem.
 - If you'd rather have problems on the **device node**, check in your tenant which dimension the node extraction adds to
   the records. It's typically a field carrying the new node's Smartscape ID. Split the detector's query by that dimension and
-  use it as `dt.source_entity`.
+  rename it to `dt.smartscape_source.id` (same `fieldsRename` trick as B5).
 
 ---
 
