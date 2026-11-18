@@ -106,7 +106,8 @@ Full instructions, including the firewall and troubleshooting, are in that repos
 
 **Bonus: test Vendor X and service problems together.** With both apps running, run `sudo dtaidemo-spike` and, in the same few
 minutes, `bash scripts/trigger.sh storm 10` in the dynatrace-demo folder (10 minutes of ~50% errors). If both events are
-open at the same time, Dynatrace usually puts them on one problem card: check its **Events** tab.
+open at the same time, Dynatrace usually puts them on one problem card: check its **Events** tab. After Part C (C4 + C6),
+Vendor X can also be shown as the **root cause** of the service's issues.
 
 ---
 
@@ -216,16 +217,21 @@ Then run `sudo dtaidemo-spike` on the VM to test. A problem should open on the s
 
 Part B only *tags* the metrics with the service ID. That makes problems land on the service, but it does **not** draw anything
 new in Smartscape. To get a **node of its own, connected to your service**, you use the two Smartscape stages in your
-OpenPipeline pipeline: **Smartscape node** creates the node, and an **edge** connects it to the service.
+OpenPipeline pipeline: **Smartscape node** creates the Vendor X node, and **Smartscape edge** connects the service to it.
+
+**Which way the link points matters.** We model Vendor X as something the service **depends on**: the service *calls* Vendor X.
+This is the direction Dynatrace follows when it looks for a root cause. When the service has problems, Dynatrace looks
+**downstream** at what the service depends on, and if Vendor X has an open problem at the same time, Vendor X can be
+reported as the root cause.
 
 > **Before you start:** you need **Smartscape on Grail** and an OpenPipeline version that has the Smartscape stages
 > (added in version 1.330). Field labels below match the pipeline editor as of late 2026; your tenant may differ slightly.
 
 **What you'll end up with:**
 ```
- [ CUSTOM_VENDORX_DEVICE: myvm ] ──(edge)──▶ [ SERVICE: my-service ]
-              ▲
-   created from every dtaidemo data point (one node per VM, identified by "host")
+ [ SERVICE: my-service ] ──(calls)──▶ [ CUSTOM_VENDORX_DEVICE: myvm ]
+   the service depends on Vendor X        created from every dtaidemo data point
+                                          (one node per VM, identified by "host")
 ```
 
 ### C1. Check which data type to use (metrics or logs)
@@ -277,49 +283,41 @@ The link needs the ID that Smartscape on Grail uses for your service.
 8. **Scroll down** in the panel. Fill in whatever appears there:
    - a **node name** (or similar) field: `host`, so the node is labelled with the VM name
    - a **validity** / lifetime setting: `60` minutes (the program sends every 30 seconds, so the node stays alive)
-   - **Recommended fields** and **Static edges to extract**: see **C4**
-9. Don't save yet. Do C4 first, then save once.
+   - **Recommended fields**: leave it as it is. Dynatrace copies those fields (e.g. `aws.region`) onto the node only when the
+     data has them, and ours doesn't, so they're harmless.
+   - **Static edges to extract**: **leave it empty.** A static edge can only point *from* this node *to* something else,
+     which would make Vendor X depend on the service, the wrong way round. C4 adds the link in the other direction.
+9. Click **Save** at the **top right** of the pipeline (blue button).
 
-### C4. Link the node to the service (still in the same Smartscape node panel)
-The link is set inside the node processor you just filled in (C3), so you don't need the **Smartscape edge** stage.
+### C4. Make the service depend on Vendor X (Smartscape edge stage)
+This link goes in the separate **Smartscape edge** stage, because it starts at the **service** and points **to** the Vendor X node.
 
-1. Keep scrolling down the **dtaidemo device node** panel. You'll pass a **Recommended fields (18)** box listing fields such as
-   `aws.region` and `azure.resource.group`. **Leave it as it is.** Dynatrace copies those fields onto the node only when the
-   data has them, and ours doesn't, so they're harmless.
-2. Below it is **Static edges to extract**. Leave **Pre-defined** selected (not *Custom*).
-3. Click **Select an EDGE_TYPE** and choose **calls**.
-   If **calls** isn't in the list, pick the closest relationship, such as **uses** or **belongs_to**.
-4. In the box with the grey text `CUSTOM_NodeType`, type the type of node you're linking **to**:
+> **Already added a static edge earlier?** (Older versions of this README linked Vendor X → service with **calls**.)
+> Remove it first, or you'll have links in both directions: open **Smartscape node → dtaidemo device node**, scroll to
+> **Static edges to extract**, delete the `calls → SERVICE` entry, and save.
+
+1. In the pipeline, click **+ Smartscape edge** (or the **+** at the right of the **Smartscape edge** row).
+2. **Name:** `dtaidemo service depends on vendor x`
+3. **Matching condition:** replace `true` with
    ```
-   SERVICE
+   source == "dtaidemo"
    ```
-5. In the **Referenced field name** box, type the field that holds your service's ID (added in B2):
-   ```
-   dtaidemo.service_id
-   ```
-   (If your IDs differed in C2, use `dtaidemo.service_smartscape_id` instead.)
-6. Click **Add**. The edge appears in a list under the boxes, showing `calls`, `SERVICE` and `dtaidemo.service_id`.
-7. Click **Save** at the **top right** of the pipeline (blue button). The route from B3 already sends the data here, so
-   nothing else needs changing.
-
-When you're done, the pipeline should show **Processing 1**, **Smartscape node 1** and **Smartscape edge 0**.
-
-<details>
-<summary><b>Alternative:</b> only if your node panel has no "Static edges to extract" section</summary>
-
-Use the **Smartscape edge** stage instead:
-1. Click **+ Smartscape edge** in the **Smartscape edge** row.
-2. **Name:** `dtaidemo device to service`
-3. **Matching condition:** `source == "dtaidemo"`
-4. **Source type:** `CUSTOM_VENDORX_DEVICE` (same as the node type in C3)
-5. **Source ID field name:** `dtaidemo.device_id` (the node ID field from C3, step 5)
-6. **Edge type:** **calls** (or **belongs_to**)
-7. **Target type:** `SERVICE`
-8. **Target ID field name:** `dtaidemo.service_id`
-9. **Save** the pipeline.
+4. Fill in the **source** (the side the link starts from: the service):
+   - **Source type:** `SERVICE`
+   - **Source ID field name:** `dtaidemo.service_id`
+     (or `dtaidemo.service_smartscape_id` if your IDs differed in C2)
+5. **Edge type:** choose **calls**, meaning "the service calls Vendor X" (the service depends on it).
+   If **calls** isn't offered, choose **uses**.
+6. Fill in the **target** (the side the link points to: the Vendor X node):
+   - **Target type:** `CUSTOM_VENDORX_DEVICE` (same as the node type in C3)
+   - **Target ID field name:** `dtaidemo.device_id` (the node ID field from C3, step 5)
+7. Click **Save** at the top right of the pipeline.
 
 The node stage runs before the edge stage, so `dtaidemo.device_id` is already filled in when the edge is built.
-</details>
+When you're done, the pipeline should show **Processing 1**, **Smartscape node 1** and **Smartscape edge 1**.
+
+> Exact labels in the edge panel may differ slightly (e.g. *Source node type* / *Target node type*). What matters is:
+> **from** `SERVICE` using `dtaidemo.service_id`, **to** `CUSTOM_VENDORX_DEVICE` using `dtaidemo.device_id`, type **calls**.
 
 ### C5. Check it worked (wait ~2–5 minutes)
 1. **The node exists:** in a Notebook run
@@ -327,23 +325,45 @@ The node stage runs before the edge stage, so `dtaidemo.device_id` is already fi
    smartscapeNodes "CUSTOM_VENDORX_DEVICE"
    ```
    You should see one row per VM running the program.
-2. **The link exists:** open **Smartscape on Grail**, type your VM name in **Find nodes**, click it, then **View topology**.
-   You should see a line to your service. Turn on **Hide unconnected nodes**: if your node still shows, it's linked.
+2. **The link exists and points the right way:** open **Smartscape**, find your service (e.g. `dynatrace-demo`) and open
+   **View topology → Related nodes**. `CUSTOM_VENDORX_DEVICE` should now appear under **Target**, with the arrow going
+   from the service to it labelled **calls**. If it appears under **Source** instead, the old static edge is still there
+   (see the note at the start of C4).
 3. **Nothing appears?** Check that:
    - the processor shows no red warning icon in the pipeline
    - **Extract node** is on
    - the matching conditions say `source == "dtaidemo"`, not `true` or a typo
    - the field names are typed exactly: `dtaidemo.device_id`, `dtaidemo.service_id`
+   - in the edge: source = `SERVICE`, target = `CUSTOM_VENDORX_DEVICE` (not swapped)
    - the program is still sending (`sudo journalctl -u dtaidemo -f` shows `HTTP 202`)
 
-### C6. Alerts and problems
-- Keep the alert from **B5** as it is. The problem lands on the **service**, and because the device node is now linked to it,
-  you can see the device when you open the topology around the problem.
-- If you'd rather have problems on the **device node**, change the B5 query to use the node ID field from C3:
-  ```
-  timeseries v = avg(dtaidemo.queue_depth), by:{dtaidemo.device_id}
-  | fieldsRename dt.smartscape_source.id = dtaidemo.device_id
-  ```
+### C6. Alerts and problems: move the Vendor X alert onto the Vendor X node
+For root-cause analysis, the Vendor X problem has to be **on the Vendor X node**, not on the service. Otherwise it's just
+another event on the service, and there's nothing downstream for Dynatrace to point to.
+
+1. Open the alert from **B5** (**Anomaly Detection** app) and change the query to:
+   ```
+   timeseries v = avg(dtaidemo.queue_depth), by:{dtaidemo.device_id}
+   | fieldsRename dt.smartscape_source.id = dtaidemo.device_id
+   ```
+2. Optional: change the **Event name** to `Vendor X queue depth too high on {dt.smartscape_source.id}`.
+3. **Save.** Click **Preview** first if you like: the line should now be labelled with the Vendor X node's ID instead of `SERVICE-…`.
+
+**What happens now:**
+
+| Situation | Result |
+|---|---|
+| Only Vendor X spikes | A problem on the **Vendor X node**. The service is listed as affected only if it also shows issues. |
+| Only the service has issues (e.g. errors) | A problem on the **service**, from Dynatrace's own detection. Vendor X isn't involved. |
+| Both at the same time | Dynatrace sees an issue on the service *and* on something it depends on, so it can merge them into **one problem** and point to **Vendor X as the root cause**. |
+
+To test the last row, see **Bonus** under [Don't have a service yet?](#dont-have-a-service-yet): run `sudo dtaidemo-spike` and
+`bash scripts/trigger.sh storm 10` at the same time, then open the problem's **root cause** section.
+
+> **Not guaranteed:** whether Dynatrace's root-cause analysis follows links created through OpenPipeline (rather than links
+> OneAgent discovers itself) can depend on your tenant version. If the two events show up as separate problems, or are
+> merged without Vendor X as the root cause, the setup above is still correct; the root-cause engine just doesn't use
+> custom links on your tenant yet.
 
 ---
 
