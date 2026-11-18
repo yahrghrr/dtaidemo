@@ -74,7 +74,12 @@ To fix it, run `sudo rm /etc/dtaidemo/config.env && sudo ./install.sh` and enter
 
 ## Part B: Attach the service entity ID in OpenPipeline
 
-Goal: every `dtaidemo.*` data point gets the dimension `dt.entity.service = SERVICE-XXXX`, so Davis can raise problems on that service.
+Goal: every `dtaidemo.*` data point gets a dimension holding the service's ID (`SERVICE-XXXX`), so Davis can raise problems on that service.
+
+> **Important:** OpenPipeline does **not** let a processor set or change reserved `dt.entity.*` fields. If you try
+> `fieldsAdd dt.entity.service = …` you get *"It is not allowed to remove or modify field 'dt.entity.service'"*.
+> So the pipeline adds the ID under **our own field name, `dtaidemo.service_id`**, and the alert (B5) and the Smartscape
+> edge (Part C) use that field. If you'd rather have the real `dt.entity.service` dimension, see the box after B4.
 
 ### B1. Find your service's entity ID
 Either open the service in Dynatrace and copy the `SERVICE-…` part of the browser URL, or run in a Notebook:
@@ -92,14 +97,9 @@ fetch dt.entity.service
    - **Matching condition:** `source == "dtaidemo"`
    - **DQL processor definition:**
      ```
-     fieldsAdd dt.entity.service = "SERVICE-1A2B3C4D5E6F7A8B"
+     fieldsAdd dtaidemo.service_id = "SERVICE-1A2B3C4D5E6F7A8B"
      ```
-     (replace with your real ID from B1)
-   - Optional, if you use the classic custom device from Part D, add it too:
-     ```
-     fieldsAdd dt.entity.service = "SERVICE-1A2B3C4D5E6F7A8B",
-               dt.entity.custom_device = "CUSTOM_DEVICE-ABCDEF0123456789"
-     ```
+     **Replace `SERVICE-1A2B3C4D5E6F7A8B` with your real ID from B1.** The value in this README is only an example.
 4. **Save** the pipeline.
 
 ### B3. Route the data into the pipeline
@@ -112,20 +112,24 @@ fetch dt.entity.service
 ### B4. Verify
 After 1–2 minutes, run in a Notebook:
 ```
-timeseries v = avg(dtaidemo.queue_depth), by:{dt.entity.service}
+timeseries v = avg(dtaidemo.queue_depth), by:{dtaidemo.service_id}
 ```
 The split should show your `SERVICE-…` ID. Enrichment only applies to **new** data, not to data that arrived before the pipeline existed.
 
-> **Fallback:** if your tenant doesn't show **Metrics** in OpenPipeline, you can skip Part B and have the program
-> add the ID itself. Add this line to `/etc/dtaidemo/config.env` and restart:
-> `EXTRA_DIMENSIONS=dt.entity.service=SERVICE-1A2B3C4D5E6F7A8B`
+> **Want the real `dt.entity.service` dimension too?** Only the data source can set it, not OpenPipeline. The program can
+> do that for you: add this line to `/etc/dtaidemo/config.env` and run `sudo systemctl restart dtaidemo`:
+> `EXTRA_DIMENSIONS=dt.entity.service=SERVICE-1A2B3C4D5E6F7A8B` (your real ID).
+> The metrics are then linked to the service natively (e.g. they appear as the service's metrics). This is optional;
+> everything in this README works with `dtaidemo.service_id` alone. It's also the fallback if your tenant doesn't show
+> **Metrics** in OpenPipeline at all.
 
 ### B5. Alert on it (makes the problem card)
 **Anomaly Detection** app, then **+ Custom anomaly detector**:
-- Query: `timeseries v = avg(dtaidemo.queue_depth), by:{dt.entity.service}`
+- Query: `timeseries v = avg(dtaidemo.queue_depth), by:{dtaidemo.service_id}`
 - Model: **Static threshold**, alert **above `150`**, e.g. 3 of 5 violating samples
-- Event template: `event.type = ERROR_EVENT` (or `CUSTOM_ALERT`), `dt.source_entity = {dims:dt.entity.service}`,
-  `event.name = "Vendor X queue depth too high"`
+- Event template: `event.type = ERROR_EVENT` (or `CUSTOM_ALERT`), `dt.source_entity = {dims:dtaidemo.service_id}`,
+  `event.name = "Vendor X queue depth too high"`.
+  `dt.source_entity` is what ties the problem to the service; it takes the `SERVICE-…` value from our field.
 
 Then run `sudo dtaidemo-spike` on the VM to test. A problem should open on the service within a few minutes.
 
@@ -164,18 +168,18 @@ The edge needs the ID that Smartscape on Grail uses for your service. In a **Not
 smartscapeNodes "SERVICE"
 | filter contains(name, "my-service")
 ```
-Copy the ID shown. It's often the same `SERVICE-…` value you used in Part B. If it is, you can skip C3's extra field and
-use `dt.entity.service` as the target field in C4.
+Copy the ID shown. It's usually the same `SERVICE-…` value you used in Part B.
 
-### C3. Put the service ID on each record (Processing stage)
-In the same pipeline, open the **Processing** stage. Edit the **Attach service entity** processor from B2 so that it also adds
-a field holding the Smartscape ID from C2:
-```
-fieldsAdd dt.entity.service = "SERVICE-1A2B3C4D5E6F7A8B",
-          dtaidemo.service_id = "SERVICE-1A2B3C4D5E6F7A8B"
-```
-(Use the C2 value for `dtaidemo.service_id`. The processing stage runs **before** the Smartscape stage, so the field is
-available when the node and edge are built.)
+### C3. Make sure the service ID is on each record (Processing stage)
+- **Same ID as in B2:** nothing to do. The **Attach service entity** processor already adds `dtaidemo.service_id`.
+- **Different ID:** edit that processor and add a second field with the C2 value:
+  ```
+  fieldsAdd dtaidemo.service_id = "SERVICE-1A2B3C4D5E6F7A8B",
+            dtaidemo.service_smartscape_id = "<ID from C2>"
+  ```
+  Then use `dtaidemo.service_smartscape_id` as the target ID field in C4.
+
+The processing stage runs **before** the Smartscape stage, so the field is available when the node and edge are built.
 
 ### C4. Create the node and the link (Smartscape node extraction stage)
 1. Still in the same pipeline, open the **Smartscape node extraction** stage and click **+ Processor**.
@@ -197,7 +201,7 @@ available when the node and edge are built.)
    |---|---|
    | **Edge type** | pick the relationship from the list. A device feeding a service usually fits **calls**, or **belongs to** if it's part of that service |
    | **Target type** | `SERVICE` |
-   | **Target ID field** | `dtaidemo.service_id` (or `dt.entity.service` if the IDs matched in C2) |
+   | **Target ID field** | `dtaidemo.service_id` (or `dtaidemo.service_smartscape_id` if the IDs differed in C2) |
 
 4. **Save** the pipeline. The route from B3 already sends the data here, so nothing else needs changing.
 
@@ -222,7 +226,7 @@ available when the node and edge are built.)
    - the program is still sending (`sudo journalctl -u dtaidemo -f` shows `HTTP 202`)
 
 ### C6. Alerts and problems
-- Keep the anomaly detector from **B5** as it is (`dt.source_entity = {dims:dt.entity.service}`). The problem lands on the
+- Keep the anomaly detector from **B5** as it is (`dt.source_entity = {dims:dtaidemo.service_id}`). The problem lands on the
   **service**, and because the device node is now linked to it, the relationship is visible when you open the topology
   around the problem.
 - If you'd rather have problems on the **device node**, check in your tenant which dimension the node extraction adds to
@@ -242,8 +246,10 @@ device** entity. It gets its own page with charts and problems, but it is **not 
    cd ~/dtaidemo && ./create-custom-device.sh
    ```
    It prints an ID like `CUSTOM_DEVICE-ABCDEF0123456789`. Running it again updates the same device rather than creating a duplicate.
-3. Attach that ID to the metrics: either add it in the B2 processor
-   (`fieldsAdd dt.entity.custom_device = "CUSTOM_DEVICE-…"`) or add this line to `/etc/dtaidemo/config.env` and restart:
+3. Attach that ID to the metrics. OpenPipeline can't set `dt.entity.*` fields, so do it on the VM: add this line to
+   `/etc/dtaidemo/config.env` and run `sudo systemctl restart dtaidemo`:
    `EXTRA_DIMENSIONS=dt.entity.custom_device=CUSTOM_DEVICE-…`
+   (To also send the service ID, separate them with a comma:
+   `EXTRA_DIMENSIONS=dt.entity.service=SERVICE-…,dt.entity.custom_device=CUSTOM_DEVICE-…`)
 4. Find it in Dynatrace by searching for its display name. For problems on the device, use `{dims:dt.entity.custom_device}` as
    `dt.source_entity` in the detector.
