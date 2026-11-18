@@ -114,8 +114,8 @@ Full instructions, including the firewall and troubleshooting, are in that repos
 
 **Bonus: test Vendor X and service problems together.** With both apps running, run `sudo dtaidemo-spike` and, in the same few
 minutes, `bash scripts/trigger.sh storm 10` in the dynatrace-demo folder (10 minutes of ~50% errors). If both events are
-open at the same time, Dynatrace usually puts them on one problem card: check its **Events** tab. After Part C (C4 + C6),
-Vendor X can also be shown as the **root cause** of the service's issues.
+open at the same time, Dynatrace usually puts them on one problem card: check its **Events** tab. This needs the Vendor X
+alert to be on the **service** (see **C6**, option A).
 
 ---
 
@@ -266,8 +266,7 @@ There are two different things you might see on the service's page in the **Serv
 
 **a) The alert, as a badge at the top** (next to *Failure rate*, *Response time*, *Throughput*). This works with **both ways**:
 it appears for any alert attached to the service, like the B5 alert. Click the badge to see the alert's events.
-If you later move the alert to the Vendor X node (**C6**), the badge leaves the service. To keep the badge *and* have
-Vendor X as a root cause, keep **two** alerts: the B5 alert on the service, plus a copy pointed at the node as in C6.
+If you move the alert to the Vendor X node (**C6** option B), the badge leaves the service.
 
 **b) The metric charts themselves, under the service's Metrics tab.** This needs **Way 2**. The Services app lists a
 metric there when it carries Dynatrace's own service fields, which only the VM can send. (On Way 1, you can do B3 as well;
@@ -417,33 +416,43 @@ When you're done, the pipeline should show **Processing 1**, **Smartscape node 1
    - in the edge: source = `SERVICE`, target = `CUSTOM_VENDORX_DEVICE` (not swapped)
    - the program is still sending (`sudo journalctl -u dtaidemo -f` shows `HTTP 202`)
 
-### C6. Alerts and problems: move the Vendor X alert onto the Vendor X node
-For root-cause analysis, the Vendor X problem has to be **on the Vendor X node**, not on the service. Otherwise it's just
-another event on the service, and there's nothing downstream for Dynatrace to point to.
+### C6. Alerts and problems: where should the Vendor X alert live?
+The Smartscape node and link (C3–C5) are for **seeing** the dependency. Where the Vendor X **alert** points decides what
+problem cards you get. There are two choices:
 
-1. Open the alert from **B5** (**Anomaly Detection** app) and change the query to:
-   ```
-   timeseries v = avg(dtaidemo.queue_depth), by:{dtaidemo.device_id}
-   | fieldsRename dt.smartscape_source.id = dtaidemo.device_id
-   ```
-2. Optional: change the **Event name** to `Vendor X queue depth too high on {dt.smartscape_source.id}`.
-3. **Save.** Click **Preview** first if you like: the line should now be labelled with the Vendor X node's ID instead of `SERVICE-…`.
+| | **A. Alert on the service** (recommended, the B5 alert as is) | **B. Alert on the Vendor X node** |
+|---|---|---|
+| Vendor X spike + service errors at the same time | **One problem card** on the service, listing both events | **Two separate problem cards** (one on the Vendor X node, one on the service) |
+| Vendor X spike alone | Problem on the service | Problem on the Vendor X node |
+| Vendor X shown as a separate root-cause node | No (both events are on the service) | Only if Dynatrace's root-cause engine follows the custom link (see below) |
 
-**What happens now:**
+**Tested result:** on a late-2026 SaaS tenant, option B produced **two separate problems**, even with both active at the same
+time and the service → Vendor X link in place. Dynatrace's root-cause analysis doesn't (yet) merge problems across links
+created in OpenPipeline. So for a **single problem card**, use **option A**.
 
-| Situation | Result |
-|---|---|
-| Only Vendor X spikes | A problem on the **Vendor X node**. The service is listed as affected only if it also shows issues. |
-| Only the service has issues (e.g. errors) | A problem on the **service**, from Dynatrace's own detection. Vendor X isn't involved. |
-| Both at the same time | Dynatrace sees an issue on the service *and* on something it depends on, so it can merge them into **one problem** and point to **Vendor X as the root cause**. |
+**Option A: alert on the service (one problem card)**
+Keep (or put back) the B5 query for your way. Way 1:
+```
+timeseries v = avg(dtaidemo.queue_depth), by:{dtaidemo.service_id}
+| fieldsRename dt.smartscape_source.id = dtaidemo.service_id
+```
+Way 2: the same with `dt.entity.service` in place of `dtaidemo.service_id`.
+Dynatrace merges events on the **same entity** that are open at the same time, so the Vendor X alert and the service's own
+error alert end up on one card.
 
-To test the last row, see **Bonus** under [Don't have a service yet?](#dont-have-a-service-yet): run `sudo dtaidemo-spike` and
-`bash scripts/trigger.sh storm 10` at the same time, then open the problem's **root cause** section.
+**Option B: alert on the Vendor X node**
+```
+timeseries v = avg(dtaidemo.queue_depth), by:{dtaidemo.device_id}
+| fieldsRename dt.smartscape_source.id = dtaidemo.device_id
+```
+Use this if you want the Vendor X node itself to turn red in Smartscape, and you're fine with a separate problem card.
 
-> **Not guaranteed:** whether Dynatrace's root-cause analysis follows links created through OpenPipeline (rather than links
-> OneAgent discovers itself) can depend on your tenant version. If the two events show up as separate problems, or are
-> merged without Vendor X as the root cause, the setup above is still correct; the root-cause engine just doesn't use
-> custom links on your tenant yet.
+> **Want both: one problem card *and* Vendor X marked on its node?** Use option A for the alert, plus a **copy** with the
+> option B query whose **event type** is set to `CUSTOM_INFO` (alert's **Advanced** tab → **Event properties** →
+> `event.type`). An info event shows on the Vendor X node's timeline but doesn't open a problem card of its own.
+
+To test, see **Bonus** under [Don't have a service yet?](#dont-have-a-service-yet): start
+`bash scripts/trigger.sh storm 10`, and about 3 minutes later run `sudo dtaidemo-spike`, then check the problem's **Events** tab.
 
 ---
 
