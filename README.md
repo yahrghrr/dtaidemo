@@ -12,6 +12,7 @@ You can also trigger a spike yourself at any time.
 | `dtaidemo.throughput_rpm` | ~600 | 80–150 |
 
 Every data point has the dimensions `source="dtaidemo"` and `host="<vm name>"`.
+Part B shows two ways to tie the data to a Dynatrace service: in **OpenPipeline** (Way 1) or on the **VM only** (Way 2).
 
 > **You need a service to tie the metrics to.** Parts B and C attach the Vendor X metrics, alert and Smartscape node to an
 > existing Dynatrace **service**. If you don't have one, deploy the companion app
@@ -53,7 +54,7 @@ The installer asks for:
 1. the **URL**
 2. the **token** (hidden while you paste it; that's expected)
 3. **optionally**, the **service ID** (`SERVICE-…`) of the Dynatrace service this data belongs to. Press **Enter** to skip
-   if you don't know it yet; you can set it later with `sudo dtaidemo-set-service` (see **B6**).
+   if you don't know it yet or want to use OpenPipeline instead; see **Part B** (this is "Way 2").
 
 It then starts the service and shows the first few log lines. **`HTTP 202` means it's working.**
 
@@ -118,16 +119,27 @@ Vendor X can also be shown as the **root cause** of the service's issues.
 
 ---
 
-## Part B: Attach the service entity ID in OpenPipeline
+## Part B: Tie the data to your service (pick one of two ways)
 
-Goal: every `dtaidemo.*` data point gets a dimension holding the service's ID (`SERVICE-XXXX`), so Davis can raise problems on that service.
+Goal: every `dtaidemo.*` data point carries your service's ID (`SERVICE-…`), so Dynatrace can raise problems on that
+service. There are two ways to do this. Pick one; the rest of the README tells you which field name to use for each.
 
-> **Important:** OpenPipeline does **not** let a processor set or change reserved `dt.entity.*` fields. If you try
-> `fieldsAdd dt.entity.service = …` you get *"It is not allowed to remove or modify field 'dt.entity.service'"*.
-> So the pipeline adds the ID under **our own field name, `dtaidemo.service_id`**, and the alert (B5) and the Smartscape
-> edge (Part C) use that field. If you'd rather have the real `dt.entity.service` dimension, see the box after B4.
+| | **Way 1: OpenPipeline** | **Way 2: VM only** |
+|---|---|---|
+| Where the service ID is added | A processor in Dynatrace OpenPipeline | The dtaidemo program on the VM (`sudo dtaidemo-set-service`) |
+| Best for | Showing the realistic setup: a real third-party tool usually can't change what it sends, so Dynatrace adds the ID | The quickest setup; the metrics also show under the service's **Metrics** tab |
+| Field name to use in queries and alerts (B4, B5, B6) | `dtaidemo.service_id` | `dt.entity.service` |
+| Field name for the Smartscape link (C4) | `dtaidemo.service_id` | `dt.smartscape.service` |
+| OpenPipeline needed? | Yes (B2) | Not for alerting. For Part C, yes, but only the pipeline and route, no processor |
 
-### B1. Find your service's entity ID
+> **Why two different field names?** OpenPipeline isn't allowed to set Dynatrace's own `dt.entity.*` fields: trying
+> `fieldsAdd dt.entity.service = …` gives *"It is not allowed to remove or modify field 'dt.entity.service'"*.
+> So Way 1 uses our own field, `dtaidemo.service_id`. The program on the VM *is* allowed to send the real fields, so Way 2
+> uses `dt.entity.service` (and `dt.smartscape.service` for Smartscape).
+>
+> **Doing both is fine.** Each record then carries both fields, and you can use either name.
+
+### B1. Find your service's entity ID (both ways)
 (No service yet? Deploy the demo app first: see [Don't have a service yet?](#dont-have-a-service-yet).)
 
 Either open the service in Dynatrace and copy the `SERVICE-…` part of the browser URL, or run in a Notebook:
@@ -137,7 +149,8 @@ fetch dt.entity.service
 | fields id, entity.name
 ```
 
-### B2. Create the pipeline
+### B2. Way 1: add the service ID in OpenPipeline
+**a) Create the pipeline**
 1. Open the **OpenPipeline** app (Ctrl+K, then "OpenPipeline"). On older UIs it's under **Settings → Process and contextualize → OpenPipeline**.
 2. Choose **Metrics**, open the **Pipelines** tab, and click **+ Pipeline**. Name it `dtaidemo`.
 3. In the **Processing** stage click **+ Processor**, then **DQL**:
@@ -150,32 +163,63 @@ fetch dt.entity.service
      **Replace `SERVICE-1A2B3C4D5E6F7A8B` with your real ID from B1.** The value in this README is only an example.
 4. **Save** the pipeline.
 
-### B3. Route the data into the pipeline
+**b) Route the data into the pipeline**
 1. Still in **Metrics**, open the **Dynamic routing** tab and click **+ Dynamic route**.
    - **Name:** `dtaidemo`
    - **Matching condition:** `source == "dtaidemo"`
    - **Pipeline:** `dtaidemo`
 2. Make sure the route sits **above** any catch-all route, then **Save**.
 
-### B4. Verify
-After 1–2 minutes, run in a Notebook:
+Then go to **B4**.
+
+### B3. Way 2: add the service ID on the VM
+1. **Running an older copy of dtaidemo?** (Installed before this option existed.) Update it first; your settings are kept:
+   ```bash
+   cd ~/dtaidemo && git pull && sudo ./install.sh
+   ```
+2. **Tie the data to the service**, using your real ID from B1:
+   ```bash
+   sudo dtaidemo-set-service SERVICE-1A2B3C4D5E6F7A8B
+   ```
+   (Run it without an ID and it asks for one. If you entered the ID during install, it's already done.)
+   It saves the ID in `/etc/dtaidemo/config.env` as `SERVICE_ID=…`, restarts the program, and shows the log. Look for:
+   ```
+   Data is tied to service SERVICE-1A2B3C4D5E6F7A8B
+   ```
+   From now on, every data point carries `dt.entity.service` and `dt.smartscape.service` with that ID.
+3. **Planning to do Part C?** Part C needs an OpenPipeline pipeline and route, just without the processor. Do **B2 a)**
+   steps 1, 2 and 4 (skip step 3), then **B2 b)**. For alerting only (B4–B6), you can skip this.
+
+To change the service later, run the same command with another ID. To untie: `sudo dtaidemo-set-service none`.
+
+### B4. Verify (both ways)
+After 1–2 minutes, run in a Notebook, using the field name for your way:
+
+**Way 1:**
 ```
 timeseries v = avg(dtaidemo.queue_depth), by:{dtaidemo.service_id}
 ```
-The split should show your `SERVICE-…` ID. Enrichment only applies to **new** data, not to data that arrived before the pipeline existed.
-
-> **Want the data tied to the service natively too?** That needs Dynatrace's own service fields (`dt.entity.service`,
-> `dt.smartscape.service`), which only the data source can set, not OpenPipeline. The program does it for you; see **B6**.
-> This is optional for alerting; everything in this README works with `dtaidemo.service_id` alone. It's also the
-> fallback if your tenant doesn't show **Metrics** in OpenPipeline at all.
+**Way 2:**
+```
+timeseries v = avg(dtaidemo.queue_depth), by:{dt.entity.service}
+```
+The line should be labelled with your `SERVICE-…` ID (Way 2 may show the service's name). Only **new** data carries the ID,
+not data that arrived before you set it up.
 
 ### B5. Alert on it (makes the problem card)
 Open the **Anomaly Detection** app and click **+ Custom alert** (older UIs: **Custom anomaly detector**). Use the **Simple** tab.
 
-**1. Set scope, then Query.** Copy both lines:
+**1. Set scope, then Query.** Copy both lines for your way:
+
+**Way 1:**
 ```
 timeseries v = avg(dtaidemo.queue_depth), by:{dtaidemo.service_id}
 | fieldsRename dt.smartscape_source.id = dtaidemo.service_id
+```
+**Way 2:**
+```
+timeseries v = avg(dtaidemo.queue_depth), by:{dt.entity.service}
+| fieldsRename dt.smartscape_source.id = dt.entity.service
 ```
 The second line matters. The alert links the problem to an entity through a dimension called **`dt.smartscape_source.id`**
 (the hint under the query box says so), so we give our service ID that name.
@@ -184,7 +228,7 @@ The second line matters. The alert links the problem to an entity through a dime
 - Use case: **Static threshold**
 - Threshold: `150`, Unit: leave as is
 - Alert condition: **Alert if metric is above**
-- Click **Preview**: you should see one line per service ID, with spikes above 150 if one has happened recently.
+- Click **Preview**: you should see one line per service, with spikes above 150 if one has happened recently.
 
 **3. Add details**
 
@@ -202,51 +246,7 @@ is why the `fieldsRename` line in the query matters.
 - **Event properties:** you only need these two rows. Delete any others.
 
   | Key | Value |
-  |### B6. Optional: show the Vendor X metrics on the service's page
-There are two different things you might see on the service's page in the **Services** app:
-
-**a) The alert, as a badge at the top** (next to *Failure rate*, *Response time*, *Throughput*). This appears automatically
-for any alert attached to the service, like the B5 alert. Click the badge to see the alert's events.
-If you later move the alert to the Vendor X node (**C6**), the badge leaves the service. To keep the badge *and* have
-Vendor X as a root cause, keep **two** alerts: the B5 alert on the service, plus a copy pointed at the node as in C6.
-
-**b) The metric charts themselves, under the service's Metrics tab.** The Services app lists a metric there when the data
-carries the service's ID in Dynatrace's **own** service fields (`dt.entity.service` and `dt.smartscape.service`).
-OpenPipeline isn't allowed to add those, so the program on the VM adds them once you give it the service ID.
-
-1. **Copy the service ID.** Open the service in Dynatrace and copy the `SERVICE-…` part of the browser address
-   (the same ID as in B1/B2).
-2. **Running an older copy of dtaidemo?** (Installed before this step existed.) Update it first; your settings are kept:
-   ```bash
-   cd ~/dtaidemo && git pull && sudo ./install.sh
-   ```
-3. **Tie the data to the service**, using your real ID:
-   ```bash
-   sudo dtaidemo-set-service SERVICE-1A2B3C4D5E6F7A8B
-   ```
-   (Run it without an ID and it asks for one. If you entered the ID during install, it's already done.)
-   It saves the ID in `/etc/dtaidemo/config.env` as `SERVICE_ID=…`, restarts the program, and shows the log. Look for:
-   ```
-   Data is tied to service SERVICE-1A2B3C4D5E6F7A8B
-   ```
-4. **Check it in a Notebook** after 2 minutes:
-   ```
-   timeseries v = avg(dtaidemo.queue_depth), by:{dt.entity.service}
-   ```
-   The line should be labelled with your service.
-5. **See it on the service.** On the service's page, click the **>** at the right end of the tab row and open **Metrics**.
-   Look for `dtaidemo.queue_depth` and the other `dtaidemo.*` metrics. Only data sent after step 3 counts.
-
-This doesn't change anything else: the OpenPipeline pipeline, the alert and the Smartscape node keep working as before.
-To undo it: `sudo dtaidemo-set-service none`.
-
-> **If the metrics don't show in the Metrics tab** (tenants differ), put them on a **dashboard** next to the service's charts
-> instead: **Dashboards → + Tile**, and paste
-> ```
-> timeseries queue_depth = avg(dtaidemo.queue_depth), by:{dtaidemo.service_id}
-> ```
-
----|---|
+  |---|---|
   | `dt.smartscape_source.id` | `{dt.smartscape_source.id}` (pre-filled; keep it) |
   | `event.type` | `CUSTOM_ALERT` (or `ERROR_EVENT`) |
 
@@ -256,9 +256,31 @@ To undo it: `sudo dtaidemo-set-service none`.
 Click **Save**.
 
 > **Older tenants:** if your alert screen has no `dt.smartscape_source.id` hint or property, it uses the classic field instead.
-> Leave out the `fieldsRename` line and add the property `dt.source_entity` = `{dims:dtaidemo.service_id}`.
+> Leave out the `fieldsRename` line and add the property `dt.source_entity` = `{dims:dtaidemo.service_id}` (Way 1) or
+> `{dims:dt.entity.service}` (Way 2).
 
 Then run `sudo dtaidemo-spike` on the VM to test. A problem should open on the service within a few minutes.
+
+### B6. Optional: show the Vendor X metrics on the service's page
+There are two different things you might see on the service's page in the **Services** app:
+
+**a) The alert, as a badge at the top** (next to *Failure rate*, *Response time*, *Throughput*). This works with **both ways**:
+it appears for any alert attached to the service, like the B5 alert. Click the badge to see the alert's events.
+If you later move the alert to the Vendor X node (**C6**), the badge leaves the service. To keep the badge *and* have
+Vendor X as a root cause, keep **two** alerts: the B5 alert on the service, plus a copy pointed at the node as in C6.
+
+**b) The metric charts themselves, under the service's Metrics tab.** This needs **Way 2**. The Services app lists a
+metric there when it carries Dynatrace's own service fields, which only the VM can send. (On Way 1, you can do B3 as well;
+the two ways work side by side.)
+1. Wait a few minutes after B3.
+2. On the service's page, click the **>** at the right end of the tab row and open **Metrics**.
+3. Look for `dtaidemo.queue_depth` and the other `dtaidemo.*` metrics.
+
+> **If the metrics don't show in the Metrics tab** (tenants differ), put them on a **dashboard** next to the service's charts
+> instead: **Dashboards → + Tile**, and paste (use `dt.entity.service` on Way 2)
+> ```
+> timeseries queue_depth = avg(dtaidemo.queue_depth), by:{dtaidemo.service_id}
+> ```
 
 ---
 
@@ -285,13 +307,16 @@ reported as the root cause.
 
 ### C1. Check which data type to use (metrics or logs)
 1. Go to **Settings → Process and contextualize → OpenPipeline → Metrics** and open your `dtaidemo` pipeline from Part B.
+   (**Way 2** and no pipeline yet? Create the pipeline and route as in **B2 a)** steps 1, 2 and 4, plus **B2 b)**. You
+   don't need the processor.)
 2. Look at the list of stages. Directly below **Processing** you should see **Smartscape node** and **Smartscape edge**.
    - **Yes (most tenants):** use this Metrics pipeline for the steps below.
    - **No:** use the **log fallback**. On the VM, edit the config (`sudo nano /etc/dtaidemo/config.env`) and set (or add)
      `HEARTBEAT_LOGS=true`, then `sudo systemctl restart dtaidemo`. The program now also sends one small log line
      per cycle with the same `source` and `host` fields. (The token needs **Ingest logs**; see A1.)
-     Then in OpenPipeline, open **Logs** (not Metrics) and create a pipeline + route exactly like **B2–B3**
-     (same name, same matching condition `source == "dtaidemo"`, same DQL processor). Do steps C2–C5 in that **Logs** pipeline.
+     Then in OpenPipeline, open **Logs** (not Metrics) and create a pipeline + route exactly like **B2 a) and b)**
+     (same name, same matching condition `source == "dtaidemo"`; the DQL processor only on Way 1; on Way 2 the log lines
+     already carry the service fields). Do steps C2–C5 in that **Logs** pipeline.
 
 ### C2. Check the service ID the link will point to
 The link needs the ID that Smartscape on Grail uses for your service.
@@ -300,15 +325,16 @@ The link needs the ID that Smartscape on Grail uses for your service.
    smartscapeNodes "SERVICE"
    | filter contains(name, "my-service")
    ```
-2. Compare the ID shown with the `SERVICE-…` value you typed in B2.
-   - **Same (usual case):** nothing to do. The **Attach service entity** processor already puts it on every record as
-     `dtaidemo.service_id`.
-   - **Different:** open the **Processing** stage, click **Attach service entity**, and change the definition to:
+2. Compare the ID shown with the `SERVICE-…` value from B1.
+   - **Same (usual case):** nothing to do. The ID is already on every record: as `dtaidemo.service_id` (Way 1) or
+     `dt.smartscape.service` (Way 2).
+   - **Different:** add a field holding the ID from this step. In the **Processing** stage, edit **Attach service entity**
+     (Way 1) or add a new **DQL** processor with matching condition `source == "dtaidemo"` (Way 2), with:
      ```
-     fieldsAdd dtaidemo.service_id = "SERVICE-<your ID from B1>",
-               dtaidemo.service_smartscape_id = "<ID from this step>"
+     fieldsAdd dtaidemo.service_smartscape_id = "<ID from this step>"
      ```
-     Then wherever C4 says `dtaidemo.service_id`, use `dtaidemo.service_smartscape_id` instead.
+     On Way 1, keep the existing `dtaidemo.service_id = …` line too, separated by a comma.
+     Then use `dtaidemo.service_smartscape_id` as the source ID field in C4.
 
 ### C3. Create the node, field by field (Smartscape node stage)
 1. In the pipeline, click **+ Smartscape node** (or the **+** at the right of the **Smartscape node** row).
@@ -353,8 +379,10 @@ This link goes in the separate **Smartscape edge** stage, because it starts at t
    ```
 4. Fill in the **source** (the side the link starts from: the service):
    - **Source type:** `SERVICE`
-   - **Source ID field name:** `dtaidemo.service_id`
-     (or `dtaidemo.service_smartscape_id` if your IDs differed in C2)
+   - **Source ID field name:**
+     - **Way 1:** `dtaidemo.service_id`
+     - **Way 2:** `dt.smartscape.service`
+     - (or `dtaidemo.service_smartscape_id` if your IDs differed in C2)
 5. **Edge type:** choose **calls**, meaning "the service calls Vendor X" (the service depends on it).
    If **calls** isn't offered, choose **uses**.
 6. Fill in the **target** (the side the link points to: the Vendor X node):
@@ -366,7 +394,8 @@ The node stage runs before the edge stage, so `dtaidemo.device_id` is already fi
 When you're done, the pipeline should show **Processing 1**, **Smartscape node 1** and **Smartscape edge 1**.
 
 > Exact labels in the edge panel may differ slightly (e.g. *Source node type* / *Target node type*). What matters is:
-> **from** `SERVICE` using `dtaidemo.service_id`, **to** `CUSTOM_VENDORX_DEVICE` using `dtaidemo.device_id`, type **calls**.
+> **from** `SERVICE` using `dtaidemo.service_id` (Way 1) or `dt.smartscape.service` (Way 2), **to** `CUSTOM_VENDORX_DEVICE`
+> using `dtaidemo.device_id`, type **calls**.
 
 ### C5. Check it worked (wait ~2–5 minutes)
 1. **The node exists:** in a Notebook run
@@ -382,7 +411,9 @@ When you're done, the pipeline should show **Processing 1**, **Smartscape node 1
    - the processor shows no red warning icon in the pipeline
    - **Extract node** is on
    - the matching conditions say `source == "dtaidemo"`, not `true` or a typo
-   - the field names are typed exactly: `dtaidemo.device_id`, `dtaidemo.service_id`
+   - the field names are typed exactly: `dtaidemo.device_id`, and `dtaidemo.service_id` (Way 1) or
+     `dt.smartscape.service` (Way 2)
+   - Way 2: the program's log says `Data is tied to service SERVICE-…` (`sudo journalctl -u dtaidemo -n 20`)
    - in the edge: source = `SERVICE`, target = `CUSTOM_VENDORX_DEVICE` (not swapped)
    - the program is still sending (`sudo journalctl -u dtaidemo -f` shows `HTTP 202`)
 
@@ -430,7 +461,7 @@ device** entity. It gets its own page with charts and problems, but it is **not 
 3. Attach that ID to the metrics. OpenPipeline can't set `dt.entity.*` fields, so do it on the VM: add this line to
    `/etc/dtaidemo/config.env` and run `sudo systemctl restart dtaidemo`:
    `EXTRA_DIMENSIONS=dt.entity.custom_device=CUSTOM_DEVICE-…`
-   (To tie the data to the service as well, use `sudo dtaidemo-set-service SERVICE-…` (see B6); it works alongside
+   (To tie the data to the service as well, use `sudo dtaidemo-set-service SERVICE-…` (Way 2, B3); it works alongside
    `EXTRA_DIMENSIONS`.)
 4. Find it in Dynatrace by searching for its display name. For problems on the device, use `{dims:dt.entity.custom_device}` as
    `dt.source_entity` in the detector.
