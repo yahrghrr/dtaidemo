@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Ties the dtaidemo data to a Dynatrace service (or unties it).
+# Installed by install.sh as /usr/local/bin/dtaidemo-set-service
+#
+# Usage:  sudo dtaidemo-set-service SERVICE-1A2B3C4D5E6F7A8B
+#         sudo dtaidemo-set-service            (asks for the ID)
+#         sudo dtaidemo-set-service none       (untie)
+set -euo pipefail
+CFG="${DTAIDEMO_CONFIG:-/etc/dtaidemo/config.env}"
+
+if [ "$(id -u)" -ne 0 ] && [ -z "${DTAIDEMO_CONFIG:-}" ]; then
+  echo "Please run with sudo:  sudo dtaidemo-set-service SERVICE-..."; exit 1
+fi
+if [ ! -f "$CFG" ]; then
+  echo "dtaidemo isn't installed yet (no $CFG). Run: sudo ./install.sh"; exit 1
+fi
+
+ID="${1:-}"
+if [ -z "$ID" ]; then
+  echo "Open the service in Dynatrace and copy the SERVICE-... part of the browser address."
+  read -r -p "Service ID (or 'none' to untie): " ID
+fi
+ID=$(printf '%s' "$ID" | tr -d '[:space:]"')
+
+case "$ID" in
+  none|NONE) ID="" ;;
+  SERVICE-*) ;;
+  *) echo "'$ID' doesn't look like a service ID. It should start with SERVICE-"; exit 1 ;;
+esac
+
+if grep -q '^SERVICE_ID=' "$CFG"; then
+  sed -i "s/^SERVICE_ID=.*/SERVICE_ID=$ID/" "$CFG"
+else
+  printf '\n# Dynatrace service the data belongs to (SERVICE-...)\nSERVICE_ID=%s\n' "$ID" >> "$CFG"
+fi
+
+if [ -n "${DTAIDEMO_CONFIG:-}" ]; then exit 0; fi   # test mode: don't touch the service
+
+systemctl restart dtaidemo
+if [ -n "$ID" ]; then
+  echo "Done. dtaidemo data is now tied to $ID (new data only)."
+else
+  echo "Done. dtaidemo data is no longer tied to a service."
+fi
+sleep 3
+journalctl -u dtaidemo -n 4 --no-pager || true

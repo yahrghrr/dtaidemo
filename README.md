@@ -49,7 +49,12 @@ cd dtaidemo && sudo ./install.sh
 ```
 (On RHEL/Alma/Rocky VMs use `sudo dnf install -y git` in the first line.)
 
-The installer asks for the **URL** and the **token** (the token is hidden while you paste it; that's expected).
+The installer asks for:
+1. the **URL**
+2. the **token** (hidden while you paste it; that's expected)
+3. **optionally**, the **service ID** (`SERVICE-…`) of the Dynatrace service this data belongs to. Press **Enter** to skip
+   if you don't know it yet; you can set it later with `sudo dtaidemo-set-service` (see **B6**).
+
 It then starts the service and shows the first few log lines. **`HTTP 202` means it's working.**
 
 It runs in the background and **starts automatically after a reboot**. No outbound firewall changes are needed
@@ -60,6 +65,8 @@ on a standard Azure VM (outbound HTTPS is allowed by default).
 |---|---|
 | Watch it live (Ctrl+C to exit) | `sudo journalctl -u dtaidemo -f` |
 | **Force a spike now** (lasts 5 min) | `sudo dtaidemo-spike` |
+| **Tie the data to a service** (or change it) | `sudo dtaidemo-set-service SERVICE-1A2B3C4D5E6F7A8B` |
+| Untie it from the service | `sudo dtaidemo-set-service none` |
 | Stop / start | `sudo systemctl stop dtaidemo` / `sudo systemctl start dtaidemo` |
 | Change settings (interval, spike timing, …) | `sudo nano /etc/dtaidemo/config.env` then `sudo systemctl restart dtaidemo` |
 | Update to the latest version (keeps your settings) | `cd ~/dtaidemo && git pull && sudo ./install.sh` |
@@ -157,12 +164,10 @@ timeseries v = avg(dtaidemo.queue_depth), by:{dtaidemo.service_id}
 ```
 The split should show your `SERVICE-…` ID. Enrichment only applies to **new** data, not to data that arrived before the pipeline existed.
 
-> **Want the real `dt.entity.service` dimension too?** Only the data source can set it, not OpenPipeline. The program can
-> do that for you: add this line to `/etc/dtaidemo/config.env` and run `sudo systemctl restart dtaidemo`:
-> `EXTRA_DIMENSIONS=dt.entity.service=SERVICE-1A2B3C4D5E6F7A8B` (your real ID).
-> The metrics are then linked to the service natively (see **B6**). This is optional for alerting;
-> everything in this README works with `dtaidemo.service_id` alone. It's also the fallback if your tenant doesn't show
-> **Metrics** in OpenPipeline at all.
+> **Want the data tied to the service natively too?** That needs Dynatrace's own service fields (`dt.entity.service`,
+> `dt.smartscape.service`), which only the data source can set, not OpenPipeline. The program does it for you; see **B6**.
+> This is optional for alerting; everything in this README works with `dtaidemo.service_id` alone. It's also the
+> fallback if your tenant doesn't show **Metrics** in OpenPipeline at all.
 
 ### B5. Alert on it (makes the problem card)
 Open the **Anomaly Detection** app and click **+ Custom alert** (older UIs: **Custom anomaly detector**). Use the **Simple** tab.
@@ -206,26 +211,34 @@ If you later move the alert to the Vendor X node (**C6**), the badge leaves the 
 Vendor X as a root cause, keep **two** alerts: the B5 alert on the service, plus a copy pointed at the node as in C6.
 
 **b) The metric charts themselves, under the service's Metrics tab.** The Services app lists a metric there when the data
-carries the service's ID in Dynatrace's **own** service fields. OpenPipeline isn't allowed to add those, so the program
-on the VM adds them:
-1. On the dtaidemo VM, open the settings:
+carries the service's ID in Dynatrace's **own** service fields (`dt.entity.service` and `dt.smartscape.service`).
+OpenPipeline isn't allowed to add those, so the program on the VM adds them once you give it the service ID.
+
+1. **Copy the service ID.** Open the service in Dynatrace and copy the `SERVICE-…` part of the browser address
+   (the same ID as in B1/B2).
+2. **Running an older copy of dtaidemo?** (Installed before this step existed.) Update it first; your settings are kept:
    ```bash
-   sudo nano /etc/dtaidemo/config.env
+   cd ~/dtaidemo && git pull && sudo ./install.sh
    ```
-2. Add this line at the bottom, using your real service ID in **both** places. If there's already an `EXTRA_DIMENSIONS=`
-   line, replace it, as there can only be one.
-   ```
-   EXTRA_DIMENSIONS=dt.entity.service=SERVICE-1A2B3C4D5E6F7A8B,dt.smartscape.service=SERVICE-1A2B3C4D5E6F7A8B
-   ```
-   (`dt.entity.service` is the field older screens use; `dt.smartscape.service` is the one the new apps use.)
-3. Save (**Ctrl+O**, **Enter**, **Ctrl+X**) and restart the program:
+3. **Tie the data to the service**, using your real ID:
    ```bash
-   sudo systemctl restart dtaidemo
+   sudo dtaidemo-set-service SERVICE-1A2B3C4D5E6F7A8B
    ```
-4. Wait a few minutes. On the service's page, click the **>** at the right end of the tab row and open **Metrics**. Look for
-   `dtaidemo.queue_depth` and the other `dtaidemo.*` metrics. Only data sent after the change counts.
+   (Run it without an ID and it asks for one. If you entered the ID during install, it's already done.)
+   It saves the ID in `/etc/dtaidemo/config.env` as `SERVICE_ID=…`, restarts the program, and shows the log. Look for:
+   ```
+   Data is tied to service SERVICE-1A2B3C4D5E6F7A8B
+   ```
+4. **Check it in a Notebook** after 2 minutes:
+   ```
+   timeseries v = avg(dtaidemo.queue_depth), by:{dt.entity.service}
+   ```
+   The line should be labelled with your service.
+5. **See it on the service.** On the service's page, click the **>** at the right end of the tab row and open **Metrics**.
+   Look for `dtaidemo.queue_depth` and the other `dtaidemo.*` metrics. Only data sent after step 3 counts.
 
 This doesn't change anything else: the OpenPipeline pipeline, the alert and the Smartscape node keep working as before.
+To undo it: `sudo dtaidemo-set-service none`.
 
 > **If the metrics don't show in the Metrics tab** (tenants differ), put them on a **dashboard** next to the service's charts
 > instead: **Dashboards → + Tile**, and paste
@@ -417,7 +430,7 @@ device** entity. It gets its own page with charts and problems, but it is **not 
 3. Attach that ID to the metrics. OpenPipeline can't set `dt.entity.*` fields, so do it on the VM: add this line to
    `/etc/dtaidemo/config.env` and run `sudo systemctl restart dtaidemo`:
    `EXTRA_DIMENSIONS=dt.entity.custom_device=CUSTOM_DEVICE-…`
-   (To also send the service ID, separate them with a comma:
-   `EXTRA_DIMENSIONS=dt.entity.service=SERVICE-…,dt.entity.custom_device=CUSTOM_DEVICE-…`)
+   (To tie the data to the service as well, use `sudo dtaidemo-set-service SERVICE-…` (see B6); it works alongside
+   `EXTRA_DIMENSIONS`.)
 4. Find it in Dynatrace by searching for its display name. For problems on the device, use `{dims:dt.entity.custom_device}` as
    `dt.source_entity` in the detector.

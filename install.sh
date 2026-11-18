@@ -25,6 +25,9 @@ echo
 if [ -f /etc/dtaidemo/config.env ]; then
   echo "Existing settings found in /etc/dtaidemo/config.env - keeping them."
   echo "(Delete that file and re-run this script if you want to enter new ones.)"
+  if ! grep -q '^SERVICE_ID=.' /etc/dtaidemo/config.env; then
+    echo "Tip: tie the data to a Dynatrace service with:  sudo dtaidemo-set-service SERVICE-..."
+  fi
 else
   echo "1) Your Dynatrace environment URL"
   echo "   Example: https://abc12345.live.dynatrace.com"
@@ -37,6 +40,12 @@ else
   if [ -z "$DT_URL" ] || [ -z "$DT_API_TOKEN" ]; then
     echo "URL and token are both required. Nothing was installed."; exit 1
   fi
+  echo
+  echo "3) OPTIONAL: the Dynatrace service to tie this data to, e.g. SERVICE-1A2B3C4D5E6F7A8B"
+  echo "   (open the service in Dynatrace and copy the SERVICE-... part of the browser address)."
+  echo "   Press Enter to skip; you can set it later with: sudo dtaidemo-set-service SERVICE-..."
+  read -r -p "   Service ID: " SERVICE_ID
+  SERVICE_ID=$(printf '%s' "$SERVICE_ID" | tr -d '[:space:]"')
   install -d -m 755 /etc/dtaidemo
   umask 077
   cat > /etc/dtaidemo/config.env <<EOF
@@ -54,6 +63,8 @@ SPIKE_DURATION_MIN=5
 SOURCE_NAME=dtaidemo
 # true = also send a heartbeat log line each cycle (token needs logs.ingest too)
 HEARTBEAT_LOGS=false
+# Dynatrace service the data belongs to (SERVICE-...). Change with: sudo dtaidemo-set-service SERVICE-...
+SERVICE_ID=$SERVICE_ID
 EOF
   chmod 600 /etc/dtaidemo/config.env
   umask 022
@@ -69,6 +80,9 @@ touch /var/lib/dtaidemo/force_spike
 echo "Spike requested - it starts within ~1 second (watch with: sudo journalctl -u dtaidemo -f)"
 EOF
 chmod 755 /usr/local/bin/dtaidemo-spike
+
+# Helper command to tie the data to a Dynatrace service
+install -m 755 "$HERE/dtaidemo-set-service" /usr/local/bin/dtaidemo-set-service
 
 cat > /etc/systemd/system/dtaidemo.service <<'EOF'
 [Unit]
@@ -104,6 +118,7 @@ echo
 echo "Useful commands:"
 echo "  sudo journalctl -u dtaidemo -f     # watch it live (Ctrl+C to exit)"
 echo "  sudo dtaidemo-spike                # force a spike right now"
+echo "  sudo dtaidemo-set-service SERVICE-...   # tie the data to a Dynatrace service"
 echo "  sudo systemctl stop dtaidemo       # stop sending"
 echo "  sudo systemctl start dtaidemo      # start again"
 echo "  sudo ./uninstall.sh                # remove everything"

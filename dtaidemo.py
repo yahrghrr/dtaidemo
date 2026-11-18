@@ -19,6 +19,9 @@ Configuration comes from environment variables (the installer writes them to
   SPIKE_DURATION_MIN  how long a spike lasts, minutes   (default 5)
   SOURCE_NAME         value of the "source" dimension   (default dtaidemo)
   FORCE_SPIKE_FILE    if this file exists, spike now    (default /var/lib/dtaidemo/force_spike)
+  SERVICE_ID          optional, e.g. SERVICE-1A2B3C4D5E6F7A8B. Ties the data natively to that
+                      Dynatrace service by adding dt.entity.service and
+                      dt.smartscape.service (OpenPipeline can't add these)
   EXTRA_DIMENSIONS    optional, e.g. dt.entity.custom_device=CUSTOM_DEVICE-ABC,team=demo
   HEARTBEAT_LOGS      "true" = also send one log line per cycle to the Logs API
                       (token then also needs logs.ingest)  (default false)
@@ -148,6 +151,12 @@ def main():
     url = normalise_url(url) if url else ""
     interval = float(env("INTERVAL_SECONDS", "30"))
     dims = {"source": env("SOURCE_NAME", "dtaidemo"), "host": socket.gethostname()}
+    service_id = (env("SERVICE_ID", "") or "").strip('"')
+    if service_id:
+        if not service_id.startswith("SERVICE-"):
+            log(f"WARNING: SERVICE_ID '{service_id}' doesn't look like a service ID (SERVICE-...); using it anyway")
+        dims["dt.entity.service"] = service_id
+        dims["dt.smartscape.service"] = service_id
     for pair in (env("EXTRA_DIMENSIONS", "") or "").split(","):
         if "=" in pair:
             k, v = pair.split("=", 1)
@@ -165,6 +174,10 @@ def main():
     signal.signal(signal.SIGINT, stop)
 
     log(f"dtaidemo started -> {url or '(dry run)'} every {interval:g}s, dims={dims}")
+    if service_id:
+        log(f"Data is tied to service {service_id}")
+    else:
+        log("Not tied to a service yet (optional): run  sudo dtaidemo-set-service SERVICE-...")
     log(f"First automatic spike in ~{(sim.next_spike - time.time()) / 60:.0f} min")
 
     while running:
