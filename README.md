@@ -243,11 +243,15 @@ The link needs the ID that Smartscape on Grail uses for your service.
 ### C4. Link the node to the service
 Use **option A** if the Smartscape node panel (C3, step 8) has a static edge / relationship section. Otherwise use **option B**.
 
-**Option A: static edge, inside the node processor from C3**
-1. In the static edges section, click **Add** (or **+**).
-2. **Edge type:** choose from the list. **calls** fits a feed that the service uses; **belongs to** fits a part of the service.
-3. **Target type:** `SERVICE`
-4. **Target ID field name:** `dtaidemo.service_id`
+**Option A: static edge, inside the node processor from C3 (use this if you see "Static edges to extract")**
+
+At the bottom of the node panel there's a **Recommended fields** box (leave it as it is) and below it **Static edges to extract**.
+1. Leave **Pre-defined** selected.
+2. Open **Select an EDGE_TYPE** and choose **calls**. If that's not in the list, choose the closest relationship, such as
+   **uses** or **belongs_to**.
+3. In the left box (grey text `CUSTOM_NodeType`), type the **target node type**: `SERVICE`
+4. In the right box (**Referenced field name**), type `dtaidemo.service_id`
+5. Click **Add**. The edge should appear in a list below the boxes.
 
 **Option B: Smartscape edge stage**
 1. Close the node panel (your input is kept) and click **+ Smartscape edge** in the **Smartscape edge** row.
