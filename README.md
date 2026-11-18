@@ -115,8 +115,8 @@ Full instructions, including the firewall and troubleshooting, are in that repos
 
 **Bonus: test Vendor X and service problems together.** With both apps running, start `bash scripts/trigger.sh storm 10`
 in the dynatrace-demo folder (10 minutes of ~50% errors), then about 3 minutes later run `sudo dtaidemo-spike`. If both
-events are open at the same time, Dynatrace usually puts them on one problem card. This needs the Vendor X alert to be on
-the **service** (see **C6**, option A). Step-by-step test and Notebook checks: **[Part E](#part-e-test-it-and-confirm-everything-in-a-notebook)**.
+events are open at the same time, Dynatrace puts them on one problem card (tested). This needs the Vendor X alert to be on
+the **service** with the event properties from **B5** (see also **C6**, option A). Step-by-step test and Notebook checks: **[Part E](#part-e-test-it-and-confirm-everything-in-a-notebook)**.
 
 ---
 
@@ -208,7 +208,22 @@ The line should be labelled with your `SERVICE-…` ID (Way 2 may show the servi
 not data that arrived before you set it up.
 
 ### B5. Alert on it (makes the problem card)
-Open the **Anomaly Detection** app and click **+ Custom alert** (older UIs: **Custom anomaly detector**). Use the **Simple** tab.
+
+> **Final working alert at a glance** (tested: the Vendor X event and the service's own *Service failure rate increase*
+> land on **one** problem card, with `dynatrace-demo` as the root cause). The steps below walk through each part.
+>
+> | Setting | Value |
+> |---|---|
+> | Query (Way 1) | `timeseries v = avg(dtaidemo.queue_depth), by:{dtaidemo.service_id}`<br>`\| fieldsRename dt.smartscape_source.id = dtaidemo.service_id` |
+> | Query (Way 2) | the same with `dt.entity.service` in place of `dtaidemo.service_id` |
+> | Condition | Static threshold, `150`, *Alert if metric is above* |
+> | Title / Event name | `dtaidemo` / `Vendor X queue depth too high` |
+> | Event property `dt.smartscape_source.id` | `{dt.smartscape_source.id}` |
+> | Event property `dt.source_entity` | `{dt.smartscape_source.id}` |
+> | Event property `event.type` | `ERROR_EVENT` |
+> | Event property `dt.davis.is_merging_allowed` | `true` |
+
+Open the **Anomaly Detection** app and click **+ Custom alert** (older UIs: **Custom anomaly detector**). Start in the **Simple** tab.
 
 **1. Set scope, then Query.** Copy both lines for your way:
 
@@ -237,15 +252,21 @@ The second line matters. The alert links the problem to an entity through a dime
 
 In the **Simple** tab this step only has two boxes:
 - **Title:** `dtaidemo`
-- **Event name:** `Vendor X queue depth too high on {dt.smartscape_source.id}`
+- **Event name:** `Vendor X queue depth too high`
+  (You can add ` on {dt.smartscape_source.id}` to put the service ID in the title.)
 
 Simple fills in the link to the entity (`dt.smartscape_source.id`) and the event type for you, which is why the
 `fieldsRename` line in the query matters.
 
-**Then switch to the Advanced tab: one setting there is needed for merging.** Custom alerts can be created with
-**merging turned off** (`dt.davis.is_merging_allowed = false`). With merging off, Dynatrace *never* puts the Vendor X event
-on the same problem card as the service's own events, even when both are on the same service at the same time. In the
-**Advanced** tab:
+**Then switch to the Advanced tab. This part is required for one shared problem card.** Simple mode alone produced
+two separate cards in testing, for three reasons the properties below fix:
+- custom alerts can be created with **merging turned off** (`dt.davis.is_merging_allowed = false`)
+- Simple mode fills in only the new entity field (`dt.smartscape_source.id`). The problem's **primary** entity
+  (`affected_entity_ids`) comes from the older `dt.source_entity` field, so without it the problem lands on
+  `ENVIRONMENT-0000000000000001` and can't merge with the service's problem
+- a `CUSTOM_ALERT` event is in a different category from the service's own *Error* problems
+
+In the **Advanced** tab:
 - **Event description:** plain text for whoever reads the problem, e.g.
   `Queue depth from the Vendor X feed is above 150 for service {dt.smartscape_source.id}.`
 - **Event properties:** you need these four rows. Delete any others.
@@ -437,9 +458,15 @@ problem cards you get. There are two choices:
 | Vendor X spike alone | Problem on the service | Problem on the Vendor X node |
 | Vendor X shown as a separate root-cause node | No (both events are on the service) | Only if Dynatrace's root-cause engine follows the custom link (see below) |
 
-**Tested result:** on a late-2026 SaaS tenant, option B produced **two separate problems**, even with both active at the same
-time and the service → Vendor X link in place. Dynatrace's root-cause analysis doesn't (yet) merge problems across links
-created in OpenPipeline. So for a **single problem card**, use **option A**.
+**Tested results** (late-2026 SaaS tenant):
+- **Option B** produced **two separate problems**, even with both active at the same time and the service → Vendor X link in
+  place. Dynatrace's root-cause analysis doesn't (yet) merge problems across links created in OpenPipeline.
+- **Option A**, with the four event properties from **B5** (`dt.smartscape_source.id`, `dt.source_entity`,
+  `event.type = ERROR_EVENT`, `dt.davis.is_merging_allowed = true`), produced **one problem** ("Vendor X queue depth too
+  high", *2 Events*) with **dynatrace-demo** as the root cause, listing both *Service failure rate increase* and
+  *Vendor X queue depth too high*.
+
+So for a **single problem card**, use **option A** with those properties.
 
 **Option A: alert on the service (one problem card)**
 Keep (or put back) the B5 query for your way. Way 1:
@@ -448,8 +475,8 @@ timeseries v = avg(dtaidemo.queue_depth), by:{dtaidemo.service_id}
 | fieldsRename dt.smartscape_source.id = dtaidemo.service_id
 ```
 Way 2: the same with `dt.entity.service` in place of `dtaidemo.service_id`.
-Dynatrace merges events on the **same entity** that are open at the same time, so the Vendor X alert and the service's own
-error alert end up on one card.
+Plus the four event properties in the alert's **Advanced** tab (B5). Dynatrace then merges events on the **same entity**
+that are open at the same time, so the Vendor X alert and the service's own error alert end up on one card.
 
 **Option B: alert on the Vendor X node**
 ```
@@ -544,7 +571,10 @@ fetch dt.davis.problems, from: now() - 6h
 | fields event.start, display_id, event.name, event.status, event.category, affected_entity_ids,
          smartscape.affected_entity.ids, dt.davis.event_ids
 ```
-- **Merged:** one `P-…` row whose `dt.davis.event_ids` holds two or more IDs.
+- **Merged:** one `P-…` row whose `dt.davis.event_ids` holds two or more IDs. In the **Problems** app it looks like this:
+  one active problem, category *Error*, **2 Events**, **Root cause: dynatrace-demo (Service)**, listing
+  *Service failure rate increase* and *Vendor X queue depth too high*. The problem's title comes from whichever event
+  started first.
 - **Not merged:** two `P-…` rows. Check, in this order:
   1. In query 2, the newest Vendor X row has `dt.davis.is_merging_allowed` = `false` → fix it in the alert (E3, step 4).
   2. In query 2, the newest Vendor X row shows `CUSTOM_VENDORX_DEVICE-…` → fix the query (E3, step 2).
