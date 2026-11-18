@@ -141,10 +141,18 @@ The second line matters. The alert links the problem to an entity through a dime
 - Click **Preview**: you should see one line per service ID, with spikes above 150 if one has happened recently.
 
 **3. Add details**
+
+In the **Simple** tab this step only has two boxes:
 - **Title:** `dtaidemo`
-- **Event name:** `Vendor X queue depth too high`
+- **Event name:** `Vendor X queue depth too high on {dt.smartscape_source.id}`
+
+That's all Simple needs. It fills in the link to the entity (`dt.smartscape_source.id`) and the event type for you, which
+is why the `fieldsRename` line in the query matters.
+
+*Optional, for full control:* switch to the **Advanced** tab. That's where the **Event description** box and the
+**Event properties** rows are. If you use it:
 - **Event description:** plain text for whoever reads the problem, e.g.
-  `Queue depth from the Vendor X feed is above 150 for service {dims:dt.smartscape_source.id}.`
+  `Queue depth from the Vendor X feed is above 150 for service {dt.smartscape_source.id}.`
 - **Event properties:** you only need these two rows. Delete any others.
 
   | Key | Value |
