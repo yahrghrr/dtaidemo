@@ -160,7 +160,7 @@ The split should show your `SERVICE-…` ID. Enrichment only applies to **new** 
 > **Want the real `dt.entity.service` dimension too?** Only the data source can set it, not OpenPipeline. The program can
 > do that for you: add this line to `/etc/dtaidemo/config.env` and run `sudo systemctl restart dtaidemo`:
 > `EXTRA_DIMENSIONS=dt.entity.service=SERVICE-1A2B3C4D5E6F7A8B` (your real ID).
-> The metrics are then linked to the service natively (e.g. they appear as the service's metrics). This is optional;
+> The metrics are then linked to the service natively (see **B6**). This is optional for alerting;
 > everything in this README works with `dtaidemo.service_id` alone. It's also the fallback if your tenant doesn't show
 > **Metrics** in OpenPipeline at all.
 
@@ -197,7 +197,43 @@ is why the `fieldsRename` line in the query matters.
 - **Event properties:** you only need these two rows. Delete any others.
 
   | Key | Value |
-  |---|---|
+  |### B6. Optional: show the Vendor X metrics on the service's page
+There are two different things you might see on the service's page in the **Services** app:
+
+**a) The alert, as a badge at the top** (next to *Failure rate*, *Response time*, *Throughput*). This appears automatically
+for any alert attached to the service, like the B5 alert. Click the badge to see the alert's events.
+If you later move the alert to the Vendor X node (**C6**), the badge leaves the service. To keep the badge *and* have
+Vendor X as a root cause, keep **two** alerts: the B5 alert on the service, plus a copy pointed at the node as in C6.
+
+**b) The metric charts themselves, under the service's Metrics tab.** The Services app lists a metric there when the data
+carries the service's ID in Dynatrace's **own** service fields. OpenPipeline isn't allowed to add those, so the program
+on the VM adds them:
+1. On the dtaidemo VM, open the settings:
+   ```bash
+   sudo nano /etc/dtaidemo/config.env
+   ```
+2. Add this line at the bottom, using your real service ID in **both** places. If there's already an `EXTRA_DIMENSIONS=`
+   line, replace it, as there can only be one.
+   ```
+   EXTRA_DIMENSIONS=dt.entity.service=SERVICE-1A2B3C4D5E6F7A8B,dt.smartscape.service=SERVICE-1A2B3C4D5E6F7A8B
+   ```
+   (`dt.entity.service` is the field older screens use; `dt.smartscape.service` is the one the new apps use.)
+3. Save (**Ctrl+O**, **Enter**, **Ctrl+X**) and restart the program:
+   ```bash
+   sudo systemctl restart dtaidemo
+   ```
+4. Wait a few minutes. On the service's page, click the **>** at the right end of the tab row and open **Metrics**. Look for
+   `dtaidemo.queue_depth` and the other `dtaidemo.*` metrics. Only data sent after the change counts.
+
+This doesn't change anything else: the OpenPipeline pipeline, the alert and the Smartscape node keep working as before.
+
+> **If the metrics don't show in the Metrics tab** (tenants differ), put them on a **dashboard** next to the service's charts
+> instead: **Dashboards → + Tile**, and paste
+> ```
+> timeseries queue_depth = avg(dtaidemo.queue_depth), by:{dtaidemo.service_id}
+> ```
+
+---|---|
   | `dt.smartscape_source.id` | `{dt.smartscape_source.id}` (pre-filled; keep it) |
   | `event.type` | `CUSTOM_ALERT` (or `ERROR_EVENT`) |
 
