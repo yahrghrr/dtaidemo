@@ -191,7 +191,8 @@ new in Smartscape. To get a **node of its own, connected to your service**, you 
 
 ### C1. Check which data type to use (metrics or logs)
 1. Open the **OpenPipeline** app, then **Metrics**, then your `dtaidemo` pipeline from Part B.
-2. Look at the list of stages. Do you see **Smartscape node extraction**?
+2. Look at the list of stages (the pipeline editor's left column, under **Processing**). Do you see a stage called
+   **Smartscape node** (some versions say **Smartscape node extraction**), usually followed by **Smartscape edge**?
    - **Yes:** use this Metrics pipeline for the steps below.
    - **No:** use the **log fallback**. On the VM, edit the config (`sudo nano /etc/dtaidemo/config.env`) and set (or add)
      `HEARTBEAT_LOGS=true`, then `sudo systemctl restart dtaidemo`. The program now also sends one small log line
@@ -218,8 +219,8 @@ Copy the ID shown. It's usually the same `SERVICE-…` value you used in Part B.
 
 The processing stage runs **before** the Smartscape stage, so the field is available when the node and edge are built.
 
-### C4. Create the node and the link (Smartscape node extraction stage)
-1. Still in the same pipeline, open the **Smartscape node extraction** stage and click **+ Processor**.
+### C4. Create the node and the link (Smartscape node stage)
+1. Still in the same pipeline, find the **Smartscape node** stage (directly below **Processing**) and click its **+**.
 2. Fill it in:
 
    | Setting | Value | Why |
@@ -244,7 +245,7 @@ The processing stage runs **before** the Smartscape stage, so the field is avail
 
 > **Static or dynamic edge?** A *static edge* (above) is attached to the node itself and is the simplest choice when the device
 > always belongs to the same service. If the device → service relationship changes over time, use the separate
-> **Smartscape edge extraction** stage instead. It records the link as it was at each data point, using Smartscape IDs that are
+> **Smartscape edge** stage instead. It records the link as it was at each data point, using Smartscape IDs that are
 > already on the record.
 
 ### C5. Check it worked (wait ~2–5 minutes)
