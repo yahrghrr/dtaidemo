@@ -13,6 +13,11 @@ You can also trigger a spike yourself at any time.
 
 Every data point has the dimensions `source="dtaidemo"` and `host="<vm name>"`.
 
+> **You need a service to tie the metrics to.** Parts B and C attach the Vendor X metrics, alert and Smartscape node to an
+> existing Dynatrace **service**. If you don't have one, deploy the companion app
+> **[yahrghrr/dynatrace-demo](https://github.com/yahrghrr/dynatrace-demo)** as a separate application monitored by
+> Dynatrace OneAgent. See [Don't have a service yet?](#dont-have-a-service-yet) below.
+
 ---
 
 ## Part A: Deploy it on your Azure VM
@@ -72,6 +77,39 @@ To fix it, run `sudo rm /etc/dtaidemo/config.env && sudo ./install.sh` and enter
 
 ---
 
+## Don't have a service yet?
+
+Parts B and C need an existing Dynatrace **service** for the Vendor X metrics to belong to. If you don't have one, deploy
+**[yahrghrr/dynatrace-demo](https://github.com/yahrghrr/dynatrace-demo)**. It's a small Spring Boot web app with a `/normal`
+endpoint (HTTP 200) and an `/error` endpoint (HTTP 500), built to be monitored by Dynatrace OneAgent.
+
+1. **Install OneAgent on the VM first.** In Dynatrace: **Deploy Dynatrace → Start installation → Linux**, then run the
+   generated command on the VM. (It can be the same VM as dtaidemo or a different one.)
+2. **Deploy the app:**
+   ```bash
+   git clone https://github.com/yahrghrr/dynatrace-demo.git
+   ```
+   ```bash
+   cd dynatrace-demo && sudo bash setup.sh
+   ```
+   If OneAgent was installed *after* the app, restart the app so OneAgent can monitor it:
+   `sudo systemctl restart dynatrace-demo`
+3. **Send some traffic** so Dynatrace sees requests and creates the service:
+   ```bash
+   bash scripts/trigger.sh baseline 30
+   ```
+   (30 minutes of healthy traffic. Press Ctrl+C to stop early.)
+4. After a few minutes, a service called **dynatrace-demo** appears in the **Services** app. Use **its** `SERVICE-…` ID in
+   step B1.
+
+Full instructions, including the firewall and troubleshooting, are in that repository's README.
+
+**Bonus: test Vendor X and service problems together.** With both apps running, run `sudo dtaidemo-spike` and, in the same few
+minutes, `bash scripts/trigger.sh storm 10` in the dynatrace-demo folder (10 minutes of ~50% errors). If both events are
+open at the same time, Dynatrace usually puts them on one problem card: check its **Events** tab.
+
+---
+
 ## Part B: Attach the service entity ID in OpenPipeline
 
 Goal: every `dtaidemo.*` data point gets a dimension holding the service's ID (`SERVICE-XXXX`), so Davis can raise problems on that service.
@@ -82,6 +120,8 @@ Goal: every `dtaidemo.*` data point gets a dimension holding the service's ID (`
 > edge (Part C) use that field. If you'd rather have the real `dt.entity.service` dimension, see the box after B4.
 
 ### B1. Find your service's entity ID
+(No service yet? Deploy the demo app first: see [Don't have a service yet?](#dont-have-a-service-yet).)
+
 Either open the service in Dynatrace and copy the `SERVICE-…` part of the browser URL, or run in a Notebook:
 ```
 fetch dt.entity.service
