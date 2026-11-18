@@ -141,6 +141,12 @@ service. There are two ways to do this. Pick one; the rest of the README tells y
 > So Way 1 uses our own field, `dtaidemo.service_id`. The program on the VM *is* allowed to send the real fields, so Way 2
 > uses `dt.entity.service` (and `dt.smartscape.service` for Smartscape).
 >
+> Per Dynatrace's [OpenPipeline limits](https://docs.dynatrace.com/docs/platform/openpipeline/reference/limits), for
+> metrics only `dt.entity.*` (plus `metric.key`, `metric.type`, `timestamp`, `value`, `dt.system.monitoring_source`) is
+> blocked in the Processing stage. The Smartscape field **`dt.smartscape.service` is not blocked**, so on Way 1 you can
+> optionally add it in the same processor:
+> `fieldsAdd dtaidemo.service_id = "SERVICE-…", dt.smartscape.service = "SERVICE-…"`.
+>
 > **Doing both is fine.** Each record then carries both fields, and you can use either name.
 
 ### B1. Find your service's entity ID (both ways)
@@ -263,10 +269,13 @@ Simple fills in the link to the entity (`dt.smartscape_source.id`) and the event
 
 **Then switch to the Advanced tab. This part is required for one shared problem card.** Simple mode alone produced
 two separate cards in testing, for three reasons the properties below fix:
-- custom alerts can be created with **merging turned off** (`dt.davis.is_merging_allowed = false`)
-- Simple mode fills in only the new entity field (`dt.smartscape_source.id`). The problem's **primary** entity
-  (`affected_entity_ids`) comes from the older `dt.source_entity` field, so without it the problem lands on
-  `ENVIRONMENT-0000000000000001` and can't merge with the service's problem
+- **`CUSTOM_ALERT` events don't merge by default.** Dynatrace's
+  [Davis event model](https://docs.dynatrace.com/docs/semantic-dictionary/model/davis) says merging is allowed by
+  default *"except for the event type `CUSTOM_ALERT`, where it is by default not allowed"*. Simple mode creates
+  `CUSTOM_ALERT` events, so every Vendor X event became its own problem
+- Simple mode fills in only the new entity field (`dt.smartscape_source.id`). The classic field (`dt.source_entity`)
+  stayed empty, and the problem's classic affected entity (`affected_entity_ids`) fell back to
+  `ENVIRONMENT-0000000000000001`
 - a `CUSTOM_ALERT` event is in a different category from the service's own *Error* problems
 
 In the **Advanced** tab:
@@ -281,9 +290,10 @@ In the **Advanced** tab:
   | `event.type` | `ERROR_EVENT` | Same category (*Error*) as the service's own *Failure rate increase*, which helps merging. `CUSTOM_ALERT` also works for a standalone alert |
   | `dt.davis.is_merging_allowed` | `true` (add this row) | Allows one shared problem card |
 
-  If a `dt.davis.is_merging_allowed` row is already there with `false`, change it to `true`.
-  `dt.source_entity` is Dynatrace's older field and is being phased out, but the problem's primary entity
-  (`affected_entity_ids`) is still based on it, so set both.
+  If a `dt.davis.is_merging_allowed` row is already there with `false`, change it to `true`. (With `ERROR_EVENT`, merging
+  is allowed by default anyway; setting it explicitly makes it independent of the event type.)
+  Dynatrace's docs mark `dt.source_entity` as **deprecated** (it refers to the classic entity storage; the replacement is
+  `dt.smartscape_source.id`). It was still part of the working setup on a late-2026 tenant, so set both for now.
 
   Don't type the README's instructions into these boxes. `event.name` and `event.description` are filled from the fields
   above, so they don't need rows of their own.
@@ -379,19 +389,26 @@ The link needs the ID that Smartscape on Grail uses for your service.
    source == "dtaidemo"
    ```
 4. **Node type:** type `CUSTOM_VENDORX_DEVICE`.
-   Keep the `CUSTOM_` start, as the greyed-out example `CUSTOM_NodeType` shows. This is the type name you'll see in Smartscape.
+   Per the [docs](https://docs.dynatrace.com/docs/platform/openpipeline/concepts/extraction/smartscape-extraction), it
+   must be uppercase, start with `CUSTOM_` or `EXT_`, and be unique in your environment. This is the type name you'll
+   see in Smartscape.
 5. **Node ID field name:** type `dtaidemo.device_id`.
    This is *where Dynatrace writes the new node's ID* on each record. It's a new field name, not something that already
    exists. You use it again in C4 (the link) and C6 (alerts).
+   > Dynatrace's default (and recommendation) for this box is `dt.smartscape.<type>`, here
+   > `dt.smartscape.custom_vendorx_device`. Either name works; this README uses `dtaidemo.device_id` because that's what
+   > the tested setup used. If you choose the default, use it everywhere this README says `dtaidemo.device_id`.
 6. **ID components:** these decide what makes one node different from another. We want one node per VM:
    - in the left box (**ID component**) type `host`
    - in the right box (**Referenced field name**) type `host`
    - click **Add**. The list below should change from *No ID components defined* to show `host → host`.
 7. **Extract node:** switch the toggle **on** (*"Generate a smartscape event based on this signal"*).
    Without this, the node is never actually created.
-8. **Scroll down** in the panel. Fill in whatever appears there:
-   - a **node name** (or similar) field: `host`, so the node is labelled with the VM name
-   - a **validity** / lifetime setting: `60` minutes (the program sends every 30 seconds, so the node stays alive)
+8. **Scroll down** in the panel. With **Extract node** on, these appear:
+   - **Node name** (**required** when Extract node is on): choose **Field name** and enter `host`, so the node is labelled
+     with the VM name (a **Static string** is the other option)
+   - **Node validity duration** (optional): `60` minutes (allowed 60–1440; the program sends every 30 seconds, so the
+     node stays alive)
    - **Recommended fields**: leave it as it is. Dynatrace copies those fields (e.g. `aws.region`) onto the node only when the
      data has them, and ours doesn't, so they're harmless.
    - **Static edges to extract**: **leave it empty.** A static edge can only point *from* this node *to* something else,
@@ -417,7 +434,10 @@ This link goes in the separate **Smartscape edge** stage, because it starts at t
      - **Way 1:** `dtaidemo.service_id`
      - **Way 2:** `dt.smartscape.service`
      - (or `dtaidemo.service_smartscape_id` if your IDs differed in C2)
-5. **Edge type:** choose **calls**, meaning "the service calls Vendor X" (the service depends on it).
+5. **Edge type:** choose **calls**, meaning "the service calls Vendor X" (the service depends on it). In Dynatrace's
+   [Smartscape model](https://docs.dynatrace.com/docs/semantic-dictionary/model/smartscape), `calls` is the standard
+   relationship for *"services calling other services, but also services calling databases, queue brokers, or other
+   infrastructure entities"*.
    If **calls** isn't offered, choose **uses**.
 6. Fill in the **target** (the side the link points to: the Vendor X node):
    - **Target type:** `CUSTOM_VENDORX_DEVICE` (same as the node type in C3)
@@ -570,11 +590,12 @@ fetch dt.davis.events, from: now() - 6h
 **3. Did they land on one problem card?**
 ```
 fetch dt.davis.problems, from: now() - 6h
+| filter not(dt.davis.is_duplicate)
 | filter contains(event.name, "Vendor X") or contains(event.name, "error rate")
 | sort timestamp desc
 | dedup display_id
-| fields event.start, display_id, event.name, event.status, event.category, affected_entity_ids,
-         smartscape.affected_entity.ids, dt.davis.event_ids
+| fields event.start, display_id, event.name, event.status, event.category, dt.davis.event_ids,
+         smartscape.affected_entities, root_cause.smartscape_entity, affected_entity_ids
 ```
 - **Merged:** one `P-…` row whose `dt.davis.event_ids` holds two or more IDs. In the **Problems** app it looks like this:
   one active problem, category *Error*, **2 Events**, **Root cause: dynatrace-demo (Service)**, listing
@@ -583,8 +604,9 @@ fetch dt.davis.problems, from: now() - 6h
 - **Not merged:** two `P-…` rows. Check, in this order:
   1. In query 2, the newest Vendor X row has `dt.davis.is_merging_allowed` = `false` → fix it in the alert (E3, step 4).
   2. In query 2, the newest Vendor X row shows `CUSTOM_VENDORX_DEVICE-…` → fix the query (E3, step 2).
-  3. In query 3, the Vendor X problem's `affected_entity_ids` shows `ENVIRONMENT-…` instead of your `SERVICE-…` (even if
-     `smartscape.affected_entity.ids` and the Problems list show the service) → add the `dt.source_entity` property (E3, step 4).
+  3. In query 3, the Vendor X problem's `affected_entity_ids` (classic, deprecated field) shows `ENVIRONMENT-…` instead of
+     your `SERVICE-…`, even if `smartscape.affected_entities` and the Problems list show the service → add the
+     `dt.source_entity` property (E3, step 4).
   4. In query 3, `event.category` differs (`CUSTOM_ALERT` vs `ERROR`) → set `event.type` to `ERROR_EVENT` (E3, step 4).
   5. Compare `event.start`: the two problems have to overlap in time.
 
@@ -686,6 +708,9 @@ Settings live in `/etc/dtaidemo/config.env` (restart with `sudo systemctl restar
 
 Rules to remember:
 - OpenPipeline **can't** set `dt.entity.*` fields. That's why Way 1 uses our own field, `dtaidemo.service_id`.
+  It **can** set Smartscape fields such as `dt.smartscape.service` (only `dt.entity.*` is blocked for metrics).
+- Node type must start with `CUSTOM_` or `EXT_`. The node ID field name defaults to `dt.smartscape.<type>`.
+- A Smartscape edge needs **both** IDs already on the record: the node stage runs first and adds the node's ID.
 - The Smartscape node and edge are for **seeing** the dependency (service → calls → Vendor X). They don't merge problems by
   themselves. Merging comes from the alert settings below.
 
@@ -711,15 +736,16 @@ the last row is the result once all of them were in place.
 | # | Rule | What Dynatrace Assist found | Fix |
 |---|---|---|---|
 | 1 | The alert must be attached to the **service** through `dt.smartscape_source.id` | Vendor X events alternated between `CUSTOM_VENDORX_DEVICE-…` (alert pointed at the Vendor X node) and `SERVICE-…`. A device and a service are different entities, so Dynatrace had no shared entity to group them on | Query splits by the service ID and renames it: `\| fieldsRename dt.smartscape_source.id = dtaidemo.service_id`; event property `dt.smartscape_source.id` = `{dt.smartscape_source.id}` |
-| 2 | Merging must be **allowed** on the event | `dt.davis.is_merging_allowed = false` on the Vendor X events. With this, Dynatrace never merges the event into another problem, whatever the entity or timing | Event property `dt.davis.is_merging_allowed` = `true` |
-| 3 | The problem's **primary entity** must be the service | `smartscape.affected_entity.ids` showed the service, but `affected_entity_ids` (the main merge key) was `ENVIRONMENT-0000000000000001`, because the older `dt.source_entity` field was empty | Event property `dt.source_entity` = `{dt.smartscape_source.id}` (same service ID in the older field) |
-| 4 | Same **event category** as the service's problem | Vendor X was `CUSTOM_ALERT`; the service's *Failure rate increase* was `ERROR`. Different categories are less likely to merge | Event property `event.type` = `ERROR_EVENT` |
+| 2 | Merging must be **allowed** on the event | `dt.davis.is_merging_allowed = false` on the Vendor X events. With this, Dynatrace never merges the event into another problem, whatever the entity or timing. Confirmed by the docs: merging is allowed by default *except for `CUSTOM_ALERT`* | Event property `dt.davis.is_merging_allowed` = `true` (and `event.type = ERROR_EVENT`, see row 4) |
+| 3 | The classic **affected entity** must be the service too | The Smartscape affected entities showed the service, but the classic `affected_entity_ids` was `ENVIRONMENT-0000000000000001`, because the older `dt.source_entity` field was empty | Event property `dt.source_entity` = `{dt.smartscape_source.id}` (same service ID in the older field; deprecated per the docs, but part of the working setup) |
+| 4 | Use a mergeable **event type** in the same category | Vendor X was `CUSTOM_ALERT`; the service's *Failure rate increase* was `ERROR`. `CUSTOM_ALERT` is the one type that doesn't merge by default | Event property `event.type` = `ERROR_EVENT` |
 | 5 | Events must **overlap in time** | Starts 3 minutes apart: fine, not a blocker | Test order: start the error storm, then `sudo dtaidemo-spike` about 3 minutes later |
 | ✅ | **Result** | One problem, *2 Events*, root cause **dynatrace-demo**, listing *Service failure rate increase* and *Vendor X queue depth too high* (screenshot above) | |
 
 Also: put the alert on the **service**, not on the Vendor X node. An alert on the node gives a separate problem card (C6).
-`dt.source_entity` is Dynatrace's older field and is being phased out in favour of `dt.smartscape_source.id`, but on this
-tenant the problem's primary entity still depended on it, so **set both**.
+`dt.source_entity` is deprecated in favour of `dt.smartscape_source.id` (per the docs), but on this tenant the working
+setup used both, so **set both**. All four properties were changed together, so the test doesn't show which one alone was
+decisive; the docs point to the event type (`CUSTOM_ALERT` doesn't merge by default) as the main cause.
 
 **Dynatrace Assist suggestions that weren't needed here:** an "OpenPipeline Davis event processor" (both settings belong
 in the custom alert), and hard-coding `dt.smartscape_source.id = SERVICE-…` (the `fieldsRename` line already fills it in).
@@ -731,3 +757,11 @@ Run the three Notebook queries in **E2**:
 1. the data carries the service ID
 2. the Vendor X and failure-rate events show the same `SERVICE-…`, with merging allowed
 3. one `P-…` problem with two event IDs
+
+### Dynatrace documentation used
+- [Smartscape node and edge extraction in OpenPipeline](https://docs.dynatrace.com/docs/platform/openpipeline/concepts/extraction/smartscape-extraction): node and edge processor fields, `CUSTOM_`/`EXT_` node types, `dt.smartscape.<type>` default field, node validity 60–1440 minutes
+- [Define custom topology via OpenPipeline (tutorial)](https://docs.dynatrace.com/docs/platform/openpipeline/use-cases/tutorial-extract-topology)
+- [Smartscape model](https://docs.dynatrace.com/docs/semantic-dictionary/model/smartscape): edge types such as `calls`, `belongs_to`, `runs_on`
+- [OpenPipeline limits](https://docs.dynatrace.com/docs/platform/openpipeline/reference/limits): fields OpenPipeline can't modify (`dt.entity.*` for metrics)
+- [Processing in OpenPipeline](https://docs.dynatrace.com/docs/platform/openpipeline/concepts/processing): stage order (Processing → Smartscape node → Smartscape edge → …)
+- [Davis event and problem model](https://docs.dynatrace.com/docs/semantic-dictionary/model/davis): `dt.davis.is_merging_allowed` (not allowed by default for `CUSTOM_ALERT`), `dt.smartscape_source.id`, deprecated `dt.source_entity` / `affected_entity_ids`, event types
