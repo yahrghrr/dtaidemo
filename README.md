@@ -237,36 +237,49 @@ The link needs the ID that Smartscape on Grail uses for your service.
 8. **Scroll down** in the panel. Fill in whatever appears there:
    - a **node name** (or similar) field: `host`, so the node is labelled with the VM name
    - a **validity** / lifetime setting: `60` minutes (the program sends every 30 seconds, so the node stays alive)
-   - a **static edges** (or relationships) section: see **C4 option A**
+   - **Recommended fields** and **Static edges to extract**: see **C4**
 9. Don't save yet. Do C4 first, then save once.
 
-### C4. Link the node to the service
-Use **option A** if the Smartscape node panel (C3, step 8) has a static edge / relationship section. Otherwise use **option B**.
+### C4. Link the node to the service (still in the same Smartscape node panel)
+The link is set inside the node processor you just filled in (C3), so you don't need the **Smartscape edge** stage.
 
-**Option A: static edge, inside the node processor from C3 (use this if you see "Static edges to extract")**
+1. Keep scrolling down the **dtaidemo device node** panel. You'll pass a **Recommended fields (18)** box listing fields such as
+   `aws.region` and `azure.resource.group`. **Leave it as it is.** Dynatrace copies those fields onto the node only when the
+   data has them, and ours doesn't, so they're harmless.
+2. Below it is **Static edges to extract**. Leave **Pre-defined** selected (not *Custom*).
+3. Click **Select an EDGE_TYPE** and choose **calls**.
+   If **calls** isn't in the list, pick the closest relationship, such as **uses** or **belongs_to**.
+4. In the box with the grey text `CUSTOM_NodeType`, type the type of node you're linking **to**:
+   ```
+   SERVICE
+   ```
+5. In the **Referenced field name** box, type the field that holds your service's ID (added in B2):
+   ```
+   dtaidemo.service_id
+   ```
+   (If your IDs differed in C2, use `dtaidemo.service_smartscape_id` instead.)
+6. Click **Add**. The edge appears in a list under the boxes, showing `calls`, `SERVICE` and `dtaidemo.service_id`.
+7. Click **Save** at the **top right** of the pipeline (blue button). The route from B3 already sends the data here, so
+   nothing else needs changing.
 
-At the bottom of the node panel there's a **Recommended fields** box (leave it as it is) and below it **Static edges to extract**.
-1. Leave **Pre-defined** selected.
-2. Open **Select an EDGE_TYPE** and choose **calls**. If that's not in the list, choose the closest relationship, such as
-   **uses** or **belongs_to**.
-3. In the left box (grey text `CUSTOM_NodeType`), type the **target node type**: `SERVICE`
-4. In the right box (**Referenced field name**), type `dtaidemo.service_id`
-5. Click **Add**. The edge should appear in a list below the boxes.
+When you're done, the pipeline should show **Processing 1**, **Smartscape node 1** and **Smartscape edge 0**.
 
-**Option B: Smartscape edge stage**
-1. Close the node panel (your input is kept) and click **+ Smartscape edge** in the **Smartscape edge** row.
+<details>
+<summary><b>Alternative:</b> only if your node panel has no "Static edges to extract" section</summary>
+
+Use the **Smartscape edge** stage instead:
+1. Click **+ Smartscape edge** in the **Smartscape edge** row.
 2. **Name:** `dtaidemo device to service`
 3. **Matching condition:** `source == "dtaidemo"`
 4. **Source type:** `CUSTOM_VENDORX_DEVICE` (same as the node type in C3)
 5. **Source ID field name:** `dtaidemo.device_id` (the node ID field from C3, step 5)
-6. **Edge type:** choose **calls** (or **belongs to**)
+6. **Edge type:** **calls** (or **belongs_to**)
 7. **Target type:** `SERVICE`
 8. **Target ID field name:** `dtaidemo.service_id`
+9. **Save** the pipeline.
 
 The node stage runs before the edge stage, so `dtaidemo.device_id` is already filled in when the edge is built.
-
-**Then save:** click **Save** at the top right of the pipeline. The route from B3 already sends the data here, so nothing else
-needs changing.
+</details>
 
 ### C5. Check it worked (wait ~2–5 minutes)
 1. **The node exists:** in a Notebook run
