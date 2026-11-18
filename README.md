@@ -440,7 +440,9 @@ When you're done, the pipeline should show **Processing 1**, **Smartscape node 1
 2. **The link exists and points the right way:** open **Smartscape**, find your service (e.g. `dynatrace-demo`) and open
    **View topology → Related nodes**. `CUSTOM_VENDORX_DEVICE` should now appear under **Target**, with the arrow going
    from the service to it labelled **calls**. If it appears under **Source** instead, the old static edge is still there
-   (see the note at the start of C4).
+   (see the note at the start of C4). If it appears under **both** (as in the screenshot in
+   [Summary configuration](#summary-configuration)), the old link is still inside the selected timeframe or still configured:
+   see the note under that screenshot.
 3. **Nothing appears?** Check that:
    - the processor shows no red warning icon in the pipeline
    - **Extract node** is on
@@ -669,6 +671,18 @@ Settings live in `/etc/dtaidemo/config.env` (restart with `sudo systemctl restar
 | **Pipeline `dtaidemo` → Processing** | DQL processor *Attach service entity* **(Way 1 only)** | Matching `source == "dtaidemo"`, definition `fieldsAdd dtaidemo.service_id = "SERVICE-…"` | B2 a) |
 | **→ Smartscape node** | Processor *dtaidemo device node* | Matching `source == "dtaidemo"`; Node type `CUSTOM_VENDORX_DEVICE`; Node ID field name `dtaidemo.device_id`; ID component `host` → `host`; Extract node **on**; Static edges **empty** | C3 |
 | **→ Smartscape edge** | Processor *dtaidemo service depends on vendor x* | Matching `source == "dtaidemo"`; Source type `SERVICE`, source ID field `dtaidemo.service_id` (Way 2: `dt.smartscape.service`); Edge type **calls**; Target type `CUSTOM_VENDORX_DEVICE`, target ID field `dtaidemo.device_id` | C4 |
+
+**What the link looks like in Smartscape** (service → *Topology: Direct calls*):
+
+![Topology Direct calls for dynatrace-demo: JD-AIOPS (CUSTOM_VENDORX_DEVICE) calls dynatrace-demo as Source, and dynatrace-demo calls JD-AIOPS as Target](docs/images/topology-direct-calls.webp)
+
+- **Target** box: `dynatrace-demo` **calls** → `JD-AIOPS` (`CUSTOM_VENDORX_DEVICE`). This is the link from C4: the service
+  depends on Vendor X. The node is named after the VM (`host`), here `JD-AIOPS`.
+- **Source** box: `JD-AIOPS` **calls** → `dynatrace-demo`. This is the **old** link in the other direction (from an earlier
+  version of this README, which used a static edge on the node). It shows up when:
+  - the static edge is still in **Smartscape node → dtaidemo device node → Static edges to extract**: delete it and save, or
+  - it was removed recently and is still inside the timeframe (here *Last 2 hours*). Switch to e.g. *Last 30 minutes*;
+    once the old link is older than the timeframe (and the node validity), only the **Target** link remains.
 
 Rules to remember:
 - OpenPipeline **can't** set `dt.entity.*` fields. That's why Way 1 uses our own field, `dtaidemo.service_id`.
