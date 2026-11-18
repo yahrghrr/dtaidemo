@@ -14,6 +14,9 @@ You can also trigger a spike yourself at any time.
 Every data point has the dimensions `source="dtaidemo"` and `host="<vm name>"`.
 Part B shows two ways to tie the data to a Dynatrace service: in **OpenPipeline** (Way 1) or on the **VM only** (Way 2).
 
+**Just want the checklist?** See **[Summary configuration](#summary-configuration)** at the end: everything to set on the
+source, in OpenPipeline and in alerting, plus a screenshot of the end result.
+
 > **You need a service to tie the metrics to.** Parts B and C attach the Vendor X metrics, alert and Smartscape node to an
 > existing Dynatrace **service**. If you don't have one, deploy the companion app
 > **[yahrghrr/dynatrace-demo](https://github.com/yahrghrr/dynatrace-demo)** as a separate application monitored by
@@ -621,3 +624,82 @@ events), but check its fixes against this README:
   service ID.
 - It may report a mix of `SERVICE-…` and `CUSTOM_VENDORX_DEVICE-…` on past Vendor X events. That's just history from while
   the alert pointed at the Vendor X node (C6 option B); only events after your last change matter.
+
+---
+
+## Summary configuration
+
+Everything that has to be configured, in one place, grouped by **where** it's configured. The steps above explain each item.
+
+**End result** (tested): the Vendor X spike and the service's own failure-rate problem land on **one** problem card, with
+the service as root cause:
+
+![One problem card: "Vendor X queue depth too high", 2 events, root cause dynatrace-demo with Service failure rate increase and Vendor X queue depth too high](docs/images/merged-problem.webp)
+
+**How the pieces connect:**
+```
+ SOURCE (VM)                    OPENPIPELINE (Metrics)                       ALERTING (Anomaly Detection)
+ dtaidemo program  ──metrics──▶ route: source == "dtaidemo"                  custom alert on dtaidemo.queue_depth
+ source="dtaidemo"              ├─ Processing: add dtaidemo.service_id       ├─ split by service ID → dt.smartscape_source.id
+ host="<vm name>"               ├─ Smartscape node: CUSTOM_VENDORX_DEVICE    ├─ static threshold 150
+ (+ SERVICE_ID on Way 2)        └─ Smartscape edge: SERVICE ─calls─▶ node    └─ event properties for merging
+                                                                                       │
+                                                                                       ▼
+                                              ONE problem card on the service (with its own failure-rate event)
+```
+
+### 1. Source (the VM running dtaidemo)
+
+| What | Value | README step |
+|---|---|---|
+| API token scopes | `metrics.ingest` (plus `logs.ingest` only for the log fallback) | A1 |
+| Install | `git clone https://github.com/yahrghrr/dtaidemo.git && cd dtaidemo && sudo ./install.sh` | A3 |
+| `DT_URL`, `DT_API_TOKEN` | your environment URL and token (asked by the installer) | A3 |
+| Dimensions sent automatically | `source="dtaidemo"`, `host="<vm name>"` | (built in) |
+| **Way 2 only:** service ID | `sudo dtaidemo-set-service SERVICE-…` → adds `dt.entity.service` and `dt.smartscape.service` | B3 |
+| Test commands | `sudo dtaidemo-spike` (Vendor X spike); in dynatrace-demo: `bash scripts/trigger.sh storm 10` | E1 |
+
+Settings live in `/etc/dtaidemo/config.env` (restart with `sudo systemctl restart dtaidemo` after editing).
+
+### 2. OpenPipeline (Settings → Process and contextualize → OpenPipeline → **Metrics**)
+
+| Where | Setting | Value | README step |
+|---|---|---|---|
+| **Dynamic routing** | Route | Name `dtaidemo`, matching condition `source == "dtaidemo"`, pipeline `dtaidemo`, placed above catch-all routes | B2 b) |
+| **Pipeline `dtaidemo` → Processing** | DQL processor *Attach service entity* **(Way 1 only)** | Matching `source == "dtaidemo"`, definition `fieldsAdd dtaidemo.service_id = "SERVICE-…"` | B2 a) |
+| **→ Smartscape node** | Processor *dtaidemo device node* | Matching `source == "dtaidemo"`; Node type `CUSTOM_VENDORX_DEVICE`; Node ID field name `dtaidemo.device_id`; ID component `host` → `host`; Extract node **on**; Static edges **empty** | C3 |
+| **→ Smartscape edge** | Processor *dtaidemo service depends on vendor x* | Matching `source == "dtaidemo"`; Source type `SERVICE`, source ID field `dtaidemo.service_id` (Way 2: `dt.smartscape.service`); Edge type **calls**; Target type `CUSTOM_VENDORX_DEVICE`, target ID field `dtaidemo.device_id` | C4 |
+
+Rules to remember:
+- OpenPipeline **can't** set `dt.entity.*` fields. That's why Way 1 uses our own field, `dtaidemo.service_id`.
+- The Smartscape node and edge are for **seeing** the dependency (service → calls → Vendor X). They don't merge problems by
+  themselves. Merging comes from the alert settings below.
+
+### 3. Alerting (Anomaly Detection app → Custom alert)
+
+| Tab / section | Setting | Value |
+|---|---|---|
+| Simple → **Set scope → Query** | Query (Way 1) | `timeseries v = avg(dtaidemo.queue_depth), by:{dtaidemo.service_id}`<br>`\| fieldsRename dt.smartscape_source.id = dtaidemo.service_id` |
+| | Query (Way 2) | the same with `dt.entity.service` in place of `dtaidemo.service_id` |
+| Simple → **Define alert condition** | Model | Static threshold, `150`, *Alert if metric is above* |
+| | Preview check | `dt.smartscape_source.id` column shows `SERVICE-…` (not `CUSTOM_VENDORX_DEVICE-…`) |
+| Simple → **Add details** | Title / Event name | `dtaidemo` / `Vendor X queue depth too high` |
+| **Advanced → Event properties** | `dt.smartscape_source.id` | `{dt.smartscape_source.id}` |
+| | `dt.source_entity` | `{dt.smartscape_source.id}` |
+| | `event.type` | `ERROR_EVENT` |
+| | `dt.davis.is_merging_allowed` | `true` |
+
+Why each Advanced property matters (all four were needed for one card):
+- **`dt.smartscape_source.id`**: attaches the event to the service in the new Smartscape.
+- **`dt.source_entity`**: sets the problem's **primary** entity (`affected_entity_ids`). Without it, it falls back to
+  `ENVIRONMENT-0000000000000001` and won't merge with the service's problem.
+- **`event.type = ERROR_EVENT`**: same *Error* category as the service's built-in failure-rate problem.
+- **`dt.davis.is_merging_allowed = true`**: custom alerts can be created with merging **off**; this turns it on.
+
+Also: put the alert on the **service**, not on the Vendor X node. An alert on the node gives a separate problem card (C6).
+
+### 4. Check it worked
+Run the three Notebook queries in **E2**:
+1. the data carries the service ID
+2. the Vendor X and failure-rate events show the same `SERVICE-…`, with merging allowed
+3. one `P-…` problem with two event IDs
