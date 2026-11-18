@@ -248,15 +248,18 @@ on the same problem card as the service's own events, even when both are on the 
 **Advanced** tab:
 - **Event description:** plain text for whoever reads the problem, e.g.
   `Queue depth from the Vendor X feed is above 150 for service {dt.smartscape_source.id}.`
-- **Event properties:** you need these three rows. Delete any others.
+- **Event properties:** you need these four rows. Delete any others.
 
-  | Key | Value |
-  |---|---|
-  | `dt.smartscape_source.id` | `{dt.smartscape_source.id}` (pre-filled; keep it) |
-  | `event.type` | `CUSTOM_ALERT` (or `ERROR_EVENT`) |
-  | `dt.davis.is_merging_allowed` | `true` (add this row; it allows one shared problem card) |
+  | Key | Value | Why |
+  |---|---|---|
+  | `dt.smartscape_source.id` | `{dt.smartscape_source.id}` (pre-filled; keep it) | Ties the event to the service in the new Smartscape |
+  | `dt.source_entity` | `{dt.smartscape_source.id}` (add this row) | Ties it to the service in the **classic** entity field too. Without it the problem's primary entity becomes `ENVIRONMENT-…` and it won't merge |
+  | `event.type` | `ERROR_EVENT` | Same category (*Error*) as the service's own *Failure rate increase*, which helps merging. `CUSTOM_ALERT` also works for a standalone alert |
+  | `dt.davis.is_merging_allowed` | `true` (add this row) | Allows one shared problem card |
 
   If a `dt.davis.is_merging_allowed` row is already there with `false`, change it to `true`.
+  `dt.source_entity` is Dynatrace's older field and is being phased out, but the problem's primary entity
+  (`affected_entity_ids`) is still based on it, so set both.
 
   Don't type the README's instructions into these boxes. `event.name` and `event.description` are filled from the fields
   above, so they don't need rows of their own.
@@ -538,13 +541,17 @@ fetch dt.davis.problems, from: now() - 6h
 | filter contains(event.name, "Vendor X") or contains(event.name, "error rate")
 | sort timestamp desc
 | dedup display_id
-| fields event.start, display_id, event.name, event.status, affected_entity_ids, root_cause_entity_id, dt.davis.event_ids
+| fields event.start, display_id, event.name, event.status, event.category, affected_entity_ids,
+         smartscape.affected_entity.ids, dt.davis.event_ids
 ```
 - **Merged:** one `P-…` row whose `dt.davis.event_ids` holds two or more IDs.
 - **Not merged:** two `P-…` rows. Check, in this order:
   1. In query 2, the newest Vendor X row has `dt.davis.is_merging_allowed` = `false` → fix it in the alert (E3, step 4).
   2. In query 2, the newest Vendor X row shows `CUSTOM_VENDORX_DEVICE-…` → fix the query (E3, step 2).
-  3. Compare `event.start`: the two problems have to overlap in time.
+  3. In query 3, the Vendor X problem's `affected_entity_ids` shows `ENVIRONMENT-…` instead of your `SERVICE-…` (even if
+     `smartscape.affected_entity.ids` and the Problems list show the service) → add the `dt.source_entity` property (E3, step 4).
+  4. In query 3, `event.category` differs (`CUSTOM_ALERT` vs `ERROR`) → set `event.type` to `ERROR_EVENT` (E3, step 4).
+  5. Compare `event.start`: the two problems have to overlap in time.
 
   Older events from before a fix keep their old values, so only look at events created **after** you saved the change.
 - To look at one problem, replace the `filter` line with `| filter display_id == "P-1234567"`.
@@ -552,7 +559,7 @@ fetch dt.davis.problems, from: now() - 6h
 > If a column is empty or a query errors, field names can differ slightly between tenants. Delete the `| fields …` line,
 > run it again, and look for the field holding the `SERVICE-…` value.
 
-### E3. Where to fix the alert if query 2 shows the wrong entity
+### E3. Where to fix the alert if the checks show a problem
 1. Open the **Anomaly Detection** app (Ctrl+K / Cmd+K, "Anomaly Detection") and open the **dtaidemo** alert.
    Make sure there's only one Vendor X alert, or that you're editing the right one.
 2. On the **Simple** tab, expand **Set Scope** and set the **Query** to the B5 query for your way, e.g. Way 1:
@@ -563,8 +570,14 @@ fetch dt.davis.problems, from: now() - 6h
 3. Click **Preview** (under **Define alert condition**). Under **Result time series**, the `dt.smartscape_source.id` column
    must show your `SERVICE-…`, not `CUSTOM_VENDORX_DEVICE-…`. **Simulated alerts** shows how many times the threshold
    would have fired.
-4. Switch to the **Advanced** tab and, under **Event properties**, make sure there's a row `dt.davis.is_merging_allowed` =
-   `true` (add it, or change `false` to `true`).
+4. Switch to the **Advanced** tab and, under **Event properties**, make sure these rows are there (add or change them):
+
+   | Key | Value |
+   |---|---|
+   | `dt.smartscape_source.id` | `{dt.smartscape_source.id}` |
+   | `dt.source_entity` | `{dt.smartscape_source.id}` |
+   | `event.type` | `ERROR_EVENT` |
+   | `dt.davis.is_merging_allowed` | `true` |
 5. Click **Save**. The preview alone changes nothing. A Vendor X event that's already open stays where it is until it
    closes; only the **next** spike uses the new setting.
 
